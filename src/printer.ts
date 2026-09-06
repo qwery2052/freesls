@@ -1,7 +1,7 @@
 import pc from "picocolors";
 import type { RouteDefinition } from "./types.js";
 
-function formatMethod(method: string): string {
+export function formatMethod(method: string): string {
   const m = method.toUpperCase();
   switch (m) {
     case "GET":

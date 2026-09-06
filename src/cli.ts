@@ -4,6 +4,7 @@ import { Command } from "commander";
 import pc from "picocolors";
 import { loadServerlessConfig } from "./parser.js";
 import { printBanner, printEnvironmentSummary, printRoutes } from "./printer.js";
+import { startServer } from "./server.js";
 
 const program = new Command();
 
@@ -51,6 +52,21 @@ program
       printBanner(config.service || "service", port, opts.stage);
       printEnvironmentSummary(globalEnv, Boolean(opts.showEnv));
       printRoutes(routes, port);
+
+      const server = await startServer(routes, port, process.cwd(), {
+        stage: opts.stage,
+        region: opts.region,
+      });
+
+      const shutdown = () => {
+        console.log(pc.dim("\n🐾 Cerrando FreeSLS..."));
+        server.close(() => {
+          process.exit(0);
+        });
+      };
+
+      process.on("SIGINT", shutdown);
+      process.on("SIGTERM", shutdown);
     } catch (error: any) {
       console.error(pc.red(`\n[freesls Error] ${error.message}\n`));
       process.exit(1);

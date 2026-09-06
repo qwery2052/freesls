@@ -112,9 +112,7 @@ export function resolveVariables(text: string, ctx: ResolveContext, resolveSSM =
 
   // Si resolveSSM es false, ignoramos los bloques ${ssm:...} externos
   // para que sus variables anidadas (${self:...}) se resuelvan primero sin consumir el bloque
-  const innermostRegex = resolveSSM
-    ? /\$\{([^{}]+)\}/g
-    : /\$\{\s*(?!ssm:)([^{}]+)\}/g;
+  const innermostRegex = resolveSSM ? /\$\{([^{}]+)\}/g : /\$\{\s*(?!ssm:)([^{}]+)\}/g;
 
   let previous = "";
   while (result !== previous && iterations < maxIterations) {
