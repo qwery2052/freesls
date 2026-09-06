@@ -1,0 +1,37 @@
+{
+  "name": "freesls",
+  "version": "0.1.0",
+  "description": "",
+  "type": "module",
+  "bin": {
+    "freesls": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "keywords": [],
+  "author": "myth_dev",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.13.9",
+    "prettier": "^3.9.6",
+    "typescript": "^5.8.2"
+  },
+  "dependencies": {
+    "@aws-sdk/client-ssm": "^3.1127.0",
+    "commander": "^15.0.0",
+    "express": "^5.2.1",
+    "picocolors": "^1.1.1",
+    "yaml": "^2.9.0"
+  }
+}

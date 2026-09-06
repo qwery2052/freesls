@@ -1,0 +1,19 @@
+# Source and Tests
+src/
+tests/
+
+# Config files
+tsconfig.json
+tsup.config.ts
+vitest.config.ts
+biome.json
+
+# Tooling and CI
+.github/
+.gitignore
+.gitattributes
+.npmignore
+
+# Artifacts
+coverage/
+node_modules/
