@@ -12,6 +12,7 @@
   "scripts": {
     "build": "tsc",
     "watch": "tsc --watch",
+    "debug": "npm run build && node dist/cli.js -s dev -p 4000 --profile myth-dev --show-env",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
