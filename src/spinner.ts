@@ -1,36 +1,36 @@
 import pc from "picocolors";
 
 export class Spinner {
-  private frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  private animationFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
   private timer: NodeJS.Timeout | null = null;
-  private currentFrame = 0;
-  private text: string;
+  private currentFrameIndex = 0;
+  private statusText: string;
 
-  constructor(text: string) {
-    this.text = text;
+  constructor(initialText: string) {
+    this.statusText = initialText;
   }
 
   start() {
     process.stdout.write("\x1B[?25l"); // Ocultar cursor
     this.timer = setInterval(() => {
-      const frame = pc.cyan(this.frames[this.currentFrame]);
-      process.stdout.write(`\r ${frame} ${this.text}`);
-      this.currentFrame = (this.currentFrame + 1) % this.frames.length;
+      const currentSymbol = pc.cyan(this.animationFrames[this.currentFrameIndex]);
+      process.stdout.write(`\r ${currentSymbol} ${this.statusText}`);
+      this.currentFrameIndex = (this.currentFrameIndex + 1) % this.animationFrames.length;
     }, 80);
   }
 
-  updateText(text: string) {
-    this.text = text;
+  updateText(newText: string) {
+    this.statusText = newText;
   }
 
-  stop(success = true, finalText?: string) {
+  stop(isSuccess = true, finalText?: string) {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
     }
     process.stdout.write("\x1B[?25h"); // Restaurar cursor
-    const icon = success ? pc.green("✔") : pc.red("✖");
-    const msg = finalText || this.text;
-    process.stdout.write(`\r ${icon} ${msg}\n`);
+    const statusIcon = isSuccess ? pc.green("✔") : pc.red("✖");
+    const completionMessage = finalText || this.statusText;
+    process.stdout.write(`\r ${statusIcon} ${completionMessage}\n`);
   }
 }

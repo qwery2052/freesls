@@ -7,70 +7,82 @@ export interface ResolveContext {
   ssmValues?: Map<string, string>;
 }
 
-export function getNestedValue(obj: any, pathStr: string): any {
-  return pathStr.split(".").reduce((acc, part) => (acc ? acc[part] : undefined), obj);
+/**
+ * Obtiene un valor anidado a partir de una notación por puntos (ej. "provider.stage").
+ */
+export function getNestedValue(targetObject: any, pathExpression: string): any {
+  return pathExpression
+    .split(".")
+    .reduce(
+      (currentObject, propertyKey) => (currentObject ? currentObject[propertyKey] : undefined),
+      targetObject,
+    );
 }
 
 /**
  * Resuelve una sola variable individual.
  */
-function resolveSingleTerm(term: string, ctx: ResolveContext, resolveSSM: boolean): string | null {
-  const clean = term.trim();
+function resolveSingleTerm(
+  term: string,
+  context: ResolveContext,
+  resolveSSM: boolean,
+): string | null {
+  const trimmedTerm = term.trim();
 
   // Literal con comillas 'valor' o "valor"
   if (
-    (clean.startsWith("'") && clean.endsWith("'")) ||
-    (clean.startsWith('"') && clean.endsWith('"'))
+    (trimmedTerm.startsWith("'") && trimmedTerm.endsWith("'")) ||
+    (trimmedTerm.startsWith('"') && trimmedTerm.endsWith('"'))
   ) {
-    return clean.slice(1, -1);
+    return trimmedTerm.slice(1, -1);
   }
 
-  const match = clean.match(/^([a-zA-Z0-9_-]+):(.*)$/);
-  if (!match) return null;
+  const regexMatch = trimmedTerm.match(/^([a-zA-Z0-9_-]+):(.*)$/);
+  if (!regexMatch) return null;
 
-  const [, source, value] = match;
-  const expr = value.trim();
+  const [, variableSource, variableExpression] = regexMatch;
+  const trimmedExpression = variableExpression.trim();
 
-  switch (source) {
+  switch (variableSource) {
     case "sls":
     case "opt":
-      return expr === "stage" ? ctx.stage : ctx.stage;
+      return context.stage;
 
     case "self": {
-      if (expr === "service") return ctx.serviceName;
-      if (expr === "provider.stage") {
-        const val = getNestedValue(ctx.rawConfig, "provider.stage");
-        if (typeof val === "string" && !val.includes("${")) {
-          return val;
+      if (trimmedExpression === "service") return context.serviceName;
+      if (trimmedExpression === "provider.stage") {
+        const providerStage = getNestedValue(context.rawConfig, "provider.stage");
+        if (typeof providerStage === "string" && !providerStage.includes("${")) {
+          return providerStage;
         }
-        return ctx.stage;
+        return context.stage;
       }
-      const val = getNestedValue(ctx.rawConfig, expr);
-      return val !== undefined ? String(val) : "";
+      const nestedValue = getNestedValue(context.rawConfig, trimmedExpression);
+      return nestedValue !== undefined ? String(nestedValue) : "";
     }
 
     case "param":
-      return ctx.params[expr] ?? "";
+      return context.params[trimmedExpression] ?? "";
 
     case "env": {
-      const e = process.env[expr];
-      return e !== undefined && e !== "" ? e : null;
+      const environmentValue = process.env[trimmedExpression];
+      return environmentValue !== undefined && environmentValue !== "" ? environmentValue : null;
     }
 
     case "aws":
-      if (expr === "region") return ctx.region;
-      if (expr === "accountId") return "123456789012";
+      if (trimmedExpression === "region") return context.region;
+      if (trimmedExpression === "accountId") return "123456789012";
       return "";
 
     case "ssm": {
       if (!resolveSSM) {
         // En primera pasada, preservamos intacta la referencia ssm
-        return `\${${clean}}`;
+        return `\${${trimmedTerm}}`;
       }
-      const ssmKey = expr.split("~")[0].trim();
-      if (ctx.ssmValues) {
-        const val = ctx.ssmValues.get(ssmKey) ?? ctx.ssmValues.get(expr);
-        if (val) return val;
+      const ssmKey = trimmedExpression.split("~")[0].trim();
+      if (context.ssmValues) {
+        const ssmValue = context.ssmValues.get(ssmKey) ?? context.ssmValues.get(trimmedExpression);
+        if (ssmValue) return ssmValue;
       }
       return null;
     }
@@ -85,17 +97,17 @@ function resolveSingleTerm(term: string, ctx: ResolveContext, resolveSSM: boolea
  * Ej: "ssm:/path/KEY, env:KEY, 'fallback'"
  */
 function resolveExpressionWithFallbacks(
-  expr: string,
-  ctx: ResolveContext,
+  expression: string,
+  context: ResolveContext,
   resolveSSM: boolean,
 ): string | null {
   // Separar por comas fuera de comillas simples
-  const parts = expr.split(/,(?=(?:[^']*'[^']*')*[^']*$)/).map(p => p.trim());
+  const fallbackParts = expression.split(/,(?=(?:[^']*'[^']*')*[^']*$)/).map(part => part.trim());
 
-  for (const part of parts) {
-    const resolved = resolveSingleTerm(part, ctx, resolveSSM);
-    if (resolved !== null) {
-      return resolved;
+  for (const expressionPart of fallbackParts) {
+    const resolvedValue = resolveSingleTerm(expressionPart, context, resolveSSM);
+    if (resolvedValue !== null) {
+      return resolvedValue;
     }
   }
 
@@ -105,26 +117,26 @@ function resolveExpressionWithFallbacks(
 /**
  * Resuelve variables de adentro hacia afuera repetidamente.
  */
-export function resolveVariables(text: string, ctx: ResolveContext, resolveSSM = true): string {
-  let result = text;
-  let iterations = 0;
+export function resolveVariables(text: string, context: ResolveContext, resolveSSM = true): string {
+  let currentResult = text;
+  let iterationCount = 0;
   const maxIterations = 10;
 
   // Si resolveSSM es false, ignoramos los bloques ${ssm:...} externos
   // para que sus variables anidadas (${self:...}) se resuelvan primero sin consumir el bloque
   const innermostRegex = resolveSSM ? /\$\{([^{}]+)\}/g : /\$\{\s*(?!ssm:)([^{}]+)\}/g;
 
-  let previous = "";
-  while (result !== previous && iterations < maxIterations) {
-    previous = result;
-    result = result.replace(innermostRegex, (fullMatch, innerExpr) => {
-      const resolved = resolveExpressionWithFallbacks(innerExpr, ctx, resolveSSM);
-      return resolved !== null ? resolved : fullMatch;
+  let previousResult = "";
+  while (currentResult !== previousResult && iterationCount < maxIterations) {
+    previousResult = currentResult;
+    currentResult = currentResult.replace(innermostRegex, (fullMatch, innerExpression) => {
+      const resolvedValue = resolveExpressionWithFallbacks(innerExpression, context, resolveSSM);
+      return resolvedValue !== null ? resolvedValue : fullMatch;
     });
-    iterations++;
+    iterationCount++;
   }
 
-  return result;
+  return currentResult;
 }
 
 /**
@@ -133,18 +145,18 @@ export function resolveVariables(text: string, ctx: ResolveContext, resolveSSM =
 export function extractSSMPaths(content: string): string[] {
   // Captura la parte de la ruta en ${ssm:/mi/ruta, ...} o ${ssm:/mi/ruta}
   const ssmRegex = /\$\{\s*ssm:([^,}]+)/g;
-  const paths: string[] = [];
-  let match;
+  const discoveredPaths: string[] = [];
+  let regexMatch: RegExpExecArray | null;
 
-  while ((match = ssmRegex.exec(content)) !== null) {
-    const candidate = match[1].trim();
-    const cleanPath = candidate.split("~")[0].trim();
+  while ((regexMatch = ssmRegex.exec(content)) !== null) {
+    const candidatePath = regexMatch[1].trim();
+    const cleanPath = candidatePath.split("~")[0].trim();
 
-    // Solo tomamos rutas válidas de SSM (/...) que no tengan restos sin resolver ($)
+    // Solo tomamos rutas válidas de SSM (/...) que no tengan restos sin resolver ($ o {)
     if (cleanPath.startsWith("/") && !cleanPath.includes("$") && !cleanPath.includes("{")) {
-      paths.push(cleanPath);
+      discoveredPaths.push(cleanPath);
     }
   }
 
-  return Array.from(new Set(paths));
+  return Array.from(new Set(discoveredPaths));
 }

@@ -8,6 +8,23 @@ import { startServer } from "./server.js";
 
 const program = new Command();
 
+/**
+ * Parsea los parámetros pasados por CLI en formato clave=valor.
+ */
+function parseCliParameters(parameterEntries?: string[]): Record<string, string> {
+  if (!parameterEntries) return {};
+
+  const parsedParameters: Record<string, string> = {};
+  for (const parameterEntry of parameterEntries) {
+    const [parameterKey, parameterValue] = parameterEntry.split("=");
+    if (parameterKey && parameterValue) {
+      parsedParameters[parameterKey.trim()] = parameterValue.trim();
+    }
+  }
+
+  return parsedParameters;
+}
+
 program
   .name("freesls")
   .description("Offline API Gateway & Lambda Runner")
@@ -23,50 +40,46 @@ program
     "Muestra el valor completo de las variables de entorno sin enmascarar",
     false,
   )
-  .action(async opts => {
+  .action(async commandOptions => {
     try {
-      const port = parseInt(opts.port, 10);
+      const serverPort = parseInt(commandOptions.port, 10);
 
-      if (opts.profile) {
-        process.env.AWS_PROFILE = opts.profile;
+      if (commandOptions.profile) {
+        process.env.AWS_PROFILE = commandOptions.profile;
       }
-      process.env.AWS_REGION = opts.region;
+      process.env.AWS_REGION = commandOptions.region;
 
-      const params: Record<string, string> = {};
-      if (opts.param) {
-        for (const p of opts.param) {
-          const [k, v] = p.split("=");
-          if (k && v) params[k.trim()] = v.trim();
-        }
-      }
+      const customParameters = parseCliParameters(commandOptions.param);
 
-      console.log(pc.dim(`\n🐾 Inicializando FreeSLS en stage: ${pc.bold(opts.stage)}...`));
+      console.log(
+        pc.dim(`\n🐾 Inicializando FreeSLS en stage: ${pc.bold(commandOptions.stage)}...`),
+      );
 
       const { config, routes, globalEnv } = await loadServerlessConfig(process.cwd(), {
-        stage: opts.stage,
-        region: opts.region,
-        params,
-        resolveSSM: opts.ssm !== false,
+        stage: commandOptions.stage,
+        region: commandOptions.region,
+        params: customParameters,
+        resolveSSM: commandOptions.ssm !== false,
       });
 
-      printBanner(config.service || "service", port, opts.stage);
-      printEnvironmentSummary(globalEnv, Boolean(opts.showEnv));
-      printRoutes(routes, port);
+      printBanner(config.service || "service", serverPort, commandOptions.stage);
+      printEnvironmentSummary(globalEnv, Boolean(commandOptions.showEnv));
+      printRoutes(routes, serverPort);
 
-      const server = await startServer(routes, port, process.cwd(), {
-        stage: opts.stage,
-        region: opts.region,
+      const serverInstance = await startServer(routes, serverPort, process.cwd(), {
+        stage: commandOptions.stage,
+        region: commandOptions.region,
       });
 
-      const shutdown = () => {
+      const handleShutdown = () => {
         console.log(pc.dim("\n🐾 Cerrando FreeSLS..."));
-        server.close(() => {
+        serverInstance.close(() => {
           process.exit(0);
         });
       };
 
-      process.on("SIGINT", shutdown);
-      process.on("SIGTERM", shutdown);
+      process.on("SIGINT", handleShutdown);
+      process.on("SIGTERM", handleShutdown);
     } catch (error: any) {
       console.error(pc.red(`\n[freesls Error] ${error.message}\n`));
       process.exit(1);

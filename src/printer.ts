@@ -1,32 +1,31 @@
 import pc from "picocolors";
 import type { RouteDefinition } from "./types.js";
 
-export function formatMethod(method: string): string {
-  const m = method.toUpperCase();
-  switch (m) {
-    case "GET":
-      return pc.bold(pc.bgGreen(pc.black(" GET ")));
-    case "POST":
-      return pc.bold(pc.bgBlue(pc.white(" POST ")));
-    case "PUT":
-      return pc.bold(pc.bgYellow(pc.black(" PUT ")));
-    case "PATCH":
-      return pc.bold(pc.bgMagenta(pc.white(" PATCH ")));
-    case "DELETE":
-      return pc.bold(pc.bgRed(pc.white(" DELETE ")));
-    default:
-      return pc.bold(pc.bgWhite(pc.black(` ${m} `)));
-  }
+const METHOD_BADGE_FORMATTERS: Record<string, (methodText: string) => string> = {
+  GET: methodText => pc.bold(pc.bgGreen(pc.black(methodText))),
+  POST: methodText => pc.bold(pc.bgBlue(pc.white(methodText))),
+  PUT: methodText => pc.bold(pc.bgYellow(pc.black(methodText))),
+  PATCH: methodText => pc.bold(pc.bgMagenta(pc.white(methodText))),
+  DELETE: methodText => pc.bold(pc.bgRed(pc.white(methodText))),
+};
+
+export function formatMethod(httpMethod: string): string {
+  const normalizedMethod = httpMethod.toUpperCase();
+  const formatBadge =
+    METHOD_BADGE_FORMATTERS[normalizedMethod] ??
+    (methodText => pc.bold(pc.bgWhite(pc.black(methodText))));
+
+  return formatBadge(` ${normalizedMethod} `);
 }
 
 export function printBanner(serviceName: string, port: number, stage: string) {
-  const catArt = `
+  const bannerArt = `
    ${pc.magenta("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.1.0")}
   ${pc.magenta("( o.o )")}  ${pc.dim("Offline API Gateway & Lambda Runner")}
    ${pc.magenta("> ^ <")}   ${pc.green("●")} Service: ${pc.bold(serviceName)} ${pc.dim(`[stage: ${stage}]`)}
   `;
 
-  console.log(catArt);
+  console.log(bannerArt);
   console.log(pc.dim("─".repeat(60)));
   console.log(
     ` ${pc.bold("Local Endpoint:")} ${pc.underline(pc.cyan(`http://localhost:${port}`))}`,
@@ -34,11 +33,21 @@ export function printBanner(serviceName: string, port: number, stage: string) {
   console.log(pc.dim("─".repeat(60)));
 }
 
+const SENSITIVE_KEY_PATTERN = /KEY|SECRET|PASSWORD|TOKEN|AUTH/i;
+
+function maskSensitiveValue(valueToMask: string): string {
+  if (valueToMask.length <= 8) return valueToMask;
+  return `${valueToMask.slice(0, 4)}...${valueToMask.slice(-4)}`;
+}
+
 // Imprime el resumen de variables de entorno resueltas
-export function printEnvironmentSummary(env: Record<string, string>, showValues = false) {
-  const keys = Object.keys(env);
+export function printEnvironmentSummary(
+  environmentVariables: Record<string, string>,
+  showValues = false,
+) {
+  const environmentKeys = Object.keys(environmentVariables);
   console.log(
-    `\n ${pc.magenta("🐾")} ${pc.bold("Environment Variables Loaded:")} ${pc.dim(`(${keys.length} resueltas)`)}`,
+    `\n ${pc.magenta("🐾")} ${pc.bold("Environment Variables Loaded:")} ${pc.dim(`(${environmentKeys.length} resueltas)`)}`,
   );
 
   if (!showValues) {
@@ -49,34 +58,30 @@ export function printEnvironmentSummary(env: Record<string, string>, showValues 
     console.log(pc.yellow("   ⚠️  Mostrando valores en texto plano (--show-env activo)\n"));
   }
 
-  if (keys.length === 0) {
+  if (environmentKeys.length === 0) {
     console.log(pc.dim("   No se definieron variables de entorno globales."));
     return;
   }
 
-  for (const key of keys) {
-    const rawVal = env[key] ?? "";
-    const isMock = rawVal.startsWith("mock-");
+  for (const environmentKey of environmentKeys) {
+    const rawValue = environmentVariables[environmentKey] ?? "";
+    const isMockedValue = rawValue.startsWith("mock-");
 
-    let displayVal = rawVal;
-
-    // Si NO se activó showValues, enmascaramos strings que contengan palabras sensibles
-    if (!showValues) {
-      const isSecret = /KEY|SECRET|PASSWORD|TOKEN|AUTH/i.test(key);
-      if (isSecret && displayVal.length > 8 && !isMock) {
-        displayVal = `${displayVal.slice(0, 4)}...${displayVal.slice(-4)}`;
-      }
+    let displayValue = rawValue;
+    if (!showValues && !isMockedValue && SENSITIVE_KEY_PATTERN.test(environmentKey)) {
+      displayValue = maskSensitiveValue(displayValue);
     }
 
-    const statusBadge = isMock ? pc.yellow("⚠️  mocked") : pc.green("✅ loaded");
+    const statusBadge = isMockedValue ? pc.yellow("⚠️  mocked") : pc.green("✅ loaded");
 
     console.log(
-      `   ${statusBadge}  ${pc.bold(pc.white(key.padEnd(28)))} ${pc.dim("=")} ${pc.cyan(displayVal)}`,
+      `   ${statusBadge}  ${pc.bold(pc.white(environmentKey.padEnd(28)))} ${pc.dim("=")} ${pc.cyan(displayValue)}`,
     );
   }
 
   console.log();
 }
+
 export function printRoutes(routes: RouteDefinition[], port: number) {
   console.log(pc.dim("─".repeat(60)));
   console.log(`\n ${pc.bold("⚡ Endpoints Registrados:")}\n`);
@@ -87,12 +92,12 @@ export function printRoutes(routes: RouteDefinition[], port: number) {
   }
 
   for (const route of routes) {
-    const badge = formatMethod(route.method);
-    const url = pc.white(`http://localhost:${port}${pc.bold(route.path)}`);
+    const methodBadge = formatMethod(route.method);
+    const endpointUrl = pc.white(`http://localhost:${port}${pc.bold(route.path)}`);
     const handlerDetail =
       pc.dim(`└─ handler: `) + pc.yellow(route.handler) + pc.dim(` (${route.functionName})`);
 
-    console.log(`  ${badge}  ${url}`);
+    console.log(`  ${methodBadge}  ${endpointUrl}`);
     console.log(`     ${handlerDetail}\n`);
   }
 

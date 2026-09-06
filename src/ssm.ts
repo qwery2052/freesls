@@ -2,6 +2,8 @@ import { SSMClient, GetParametersCommand } from "@aws-sdk/client-ssm";
 import pc from "picocolors";
 import { Spinner } from "./spinner.js";
 
+const DEFAULT_BATCH_SIZE = 10;
+
 export class SSMResolver {
   private client: SSMClient;
   private cache = new Map<string, string>();
@@ -10,32 +12,33 @@ export class SSMResolver {
     this.client = new SSMClient({ region });
   }
 
-  async resolveAll(paths: string[]): Promise<Map<string, string>> {
-    const uniquePaths = Array.from(new Set(paths)).filter(p => p && !this.cache.has(p));
+  async resolveAll(parameterPaths: string[]): Promise<Map<string, string>> {
+    const uniquePaths = Array.from(new Set(parameterPaths)).filter(
+      parameterPath => Boolean(parameterPath) && !this.cache.has(parameterPath),
+    );
 
     if (uniquePaths.length === 0) return this.cache;
 
-    const profile = process.env.AWS_PROFILE || "default";
-    const region = process.env.AWS_REGION || "us-east-1";
+    const awsProfile = process.env.AWS_PROFILE || "default";
+    const awsRegion = process.env.AWS_REGION || "us-east-1";
 
-    const spinner = new Spinner(
-      `Resolviendo ${uniquePaths.length} parámetros en AWS SSM [Profile: ${pc.bold(profile)} | Region: ${pc.bold(region)}]...`,
+    const resolutionSpinner = new Spinner(
+      `Resolviendo ${uniquePaths.length} parámetros en AWS SSM [Profile: ${pc.bold(awsProfile)} | Region: ${pc.bold(awsRegion)}]...`,
     );
-    spinner.start();
+    resolutionSpinner.start();
 
-    const batchSize = 10;
     const failedParameters: string[] = [];
 
-    for (let i = 0; i < uniquePaths.length; i += batchSize) {
-      const batch = uniquePaths.slice(i, i + batchSize);
+    for (let startIndex = 0; startIndex < uniquePaths.length; startIndex += DEFAULT_BATCH_SIZE) {
+      const parameterBatch = uniquePaths.slice(startIndex, startIndex + DEFAULT_BATCH_SIZE);
       try {
         const response = await this.client.send(
-          new GetParametersCommand({ Names: batch, WithDecryption: true }),
+          new GetParametersCommand({ Names: parameterBatch, WithDecryption: true }),
         );
 
-        response.Parameters?.forEach(param => {
-          if (param.Name && param.Value) {
-            this.cache.set(param.Name, param.Value);
+        response.Parameters?.forEach(parameter => {
+          if (parameter.Name && parameter.Value) {
+            this.cache.set(parameter.Name, parameter.Value);
           }
         });
 
@@ -43,13 +46,16 @@ export class SSMResolver {
         if (response.InvalidParameters && response.InvalidParameters.length > 0) {
           failedParameters.push(...response.InvalidParameters);
         }
-      } catch (err: any) {
-        spinner.stop(false, pc.red("Falla al conectar con AWS SSM"));
-        console.error(pc.red(`\n[SSM Connection Error] ${err.message}`));
-        if (err.name === "CredentialsProviderError" || err.message?.includes("SSO")) {
+      } catch (connectionError: any) {
+        resolutionSpinner.stop(false, pc.red("Falla al conectar con AWS SSM"));
+        console.error(pc.red(`\n[SSM Connection Error] ${connectionError.message}`));
+        if (
+          connectionError.name === "CredentialsProviderError" ||
+          connectionError.message?.includes("SSO")
+        ) {
           console.error(
             pc.yellow(
-              `\n💡 Tip: Tu sesión de AWS SSO puede haber expirado. Ejecuta:\n   aws sso login --profile ${profile}\n`,
+              `\n💡 Tip: Tu sesión de AWS SSO puede haber expirado. Ejecuta:\n   aws sso login --profile ${awsProfile}\n`,
             ),
           );
         }
@@ -58,18 +64,20 @@ export class SSMResolver {
     }
 
     if (failedParameters.length > 0) {
-      spinner.stop(false, pc.red(`Falla al obtener parámetros de SSM`));
+      resolutionSpinner.stop(false, pc.red(`Falla al obtener parámetros de SSM`));
       console.error(
         pc.bold(pc.red("\nLos siguientes parámetros no existen en AWS Parameter Store:")),
       );
-      failedParameters.forEach(p => console.error(`  ${pc.red("✖")} ${pc.yellow(p)}`));
+      failedParameters.forEach(parameterName =>
+        console.error(`  ${pc.red("✖")} ${pc.yellow(parameterName)}`),
+      );
       console.error(
         pc.dim("\nVerifica que los nombres de ruta en el YAML o el stage sean los correctos.\n"),
       );
       process.exit(1);
     }
 
-    spinner.stop(
+    resolutionSpinner.stop(
       true,
       pc.green(
         `Todos los parámetros de SSM se resolvieron con éxito (${uniquePaths.length}/${uniquePaths.length})`,
@@ -78,11 +86,11 @@ export class SSMResolver {
     return this.cache;
   }
 
-  get(path: string): string {
-    const val = this.cache.get(path);
-    if (!val) {
-      throw new Error(`Parámetro no encontrado en caché de SSM: ${path}`);
+  get(parameterPath: string): string {
+    const cachedValue = this.cache.get(parameterPath);
+    if (!cachedValue) {
+      throw new Error(`Parámetro no encontrado en caché de SSM: ${parameterPath}`);
     }
-    return val;
+    return cachedValue;
   }
 }
