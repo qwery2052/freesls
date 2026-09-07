@@ -20,7 +20,7 @@ export function formatMethod(httpMethod: string): string {
 
 export function printBanner(serviceName: string, port: number, stage: string) {
   const bannerArt = `
-   ${pc.magenta("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.1.1")}
+   ${pc.magenta("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.1.2")}
   ${pc.magenta("( o.o )")}  ${pc.dim("Offline API Gateway & Lambda Runner")}
    ${pc.magenta("> ^ <")}   ${pc.green("●")} Service: ${pc.bold(serviceName)} ${pc.dim(`[stage: ${stage}]`)}
   `;
@@ -33,10 +33,10 @@ export function printBanner(serviceName: string, port: number, stage: string) {
   console.log(pc.dim("─".repeat(60)));
 }
 
-const SENSITIVE_KEY_PATTERN = /KEY|SECRET|PASSWORD|TOKEN|AUTH/i;
-
 function maskSensitiveValue(valueToMask: string): string {
-  if (valueToMask.length <= 8) return valueToMask;
+  if (!valueToMask) return "";
+  if (valueToMask.length <= 4) return "*".repeat(valueToMask.length);
+  if (valueToMask.length <= 8) return `${valueToMask.slice(0, 2)}...${valueToMask.slice(-2)}`;
   return `${valueToMask.slice(0, 4)}...${valueToMask.slice(-4)}`;
 }
 
@@ -68,7 +68,7 @@ export function printEnvironmentSummary(
     const isMockedValue = rawValue.startsWith("mock-");
 
     let displayValue = rawValue;
-    if (!showValues && !isMockedValue && SENSITIVE_KEY_PATTERN.test(environmentKey)) {
+    if (!showValues && !isMockedValue) {
       displayValue = maskSensitiveValue(displayValue);
     }
 
