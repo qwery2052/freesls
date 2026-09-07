@@ -1,8 +1,12 @@
+<p align="right">
+  <b>English</b> | <a href="./README.es.md">Español</a>
+</p>
+
 # 🐾 FreeSLS
 
 <p align="center">
   <b>Offline API Gateway & AWS Lambda Runner for Serverless Framework</b><br>
-  Ligero, rápido, con soporte nativo de TypeScript, resolución de AWS SSM y depuración con breakpoints al instante.
+  Lightweight, fast, with native TypeScript support, AWS SSM resolution, and instant breakpoint debugging.
 </p>
 
 <p align="center">
@@ -23,47 +27,47 @@
 
 ---
 
-## 💡 ¿Por qué FreeSLS?
+## 💡 Why FreeSLS?
 
-Las herramientas tradicionales de emulación local para Serverless Framework a menudo requieren plugins pesados, configuraciones complejas de Webpack/esbuild, o presentan dificultades al conectar con AWS SSM Parameter Store y al configurar breakpoints en VS Code.
+Traditional local emulation tools for Serverless Framework often require heavy plugins, complex Webpack/esbuild pipelines, or struggle with AWS SSM Parameter Store resolution and VS Code breakpoint setup.
 
-**FreeSLS** ofrece una alternativa moderna, minimalista y ultra-rápida:
+**FreeSLS** delivers a modern, minimal, and ultra-fast alternative:
 
-- **Cero configuración de compilación**: Ejecuta archivos TypeScript (`.ts`, `.tsx`) y JavaScript (`.js`, `.mjs`, `.cjs`) directamente usando [jiti](https://github.com/unjs/jiti) con source maps integrados.
-- **Resolución real de AWS SSM o Mocks locales**: Consulta parámetros reales de AWS Parameter Store respetando tus perfiles de AWS SSO/CLI, o ejecuta offline con `--no-ssm` usando `ssm.env`, fallbacks o mocks automáticos.
-- **Inyección de parámetros**: Parámetros pasados vía `--param clave=valor` se inyectan automáticamente en `process.env`.
-- **Resolución avanzada de variables**: Soporta sintaxis como `${self:...}`, `${opt:...}`, `${env:...}`, `${param:...}`, `${aws:...}` y cadenas de fallback (`${ssm:/path, env:VAR, 'fallback'}`).
-- **Depuración instantánea**: Coloca breakpoints en tus funciones Lambda y depúralos en VS Code sin pasos de build intermedios.
-- **Emulador Express 5**: Compatible con eventos `http` y `httpApi`, cabeceras multi-valor, parámetros de ruta (`{id}` y `{proxy+}`), query strings y payloads en JSON o base64.
+- **Zero Build Configuration**: Run TypeScript (`.ts`, `.tsx`) and JavaScript (`.js`, `.mjs`, `.cjs`) handlers directly using [jiti](https://github.com/unjs/jiti) with built-in source maps.
+- **Real AWS SSM Resolution or Local Mocks**: Fetch real parameters from AWS Parameter Store using your AWS SSO/CLI profiles, or run completely offline with `--no-ssm` using `ssm.env`, fallbacks, or automatic mocks.
+- **CLI Parameter Injection**: Custom arguments passed via `--param key=value` are automatically exported to `process.env`.
+- **Advanced Variable Resolution**: Native support for `${self:...}`, `${opt:...}`, `${env:...}`, `${param:...}`, `${aws:...}`, and fallback chains (`${ssm:/path, env:VAR, 'fallback'}`).
+- **Instant Debugging**: Set breakpoints in your Lambda handler code and debug directly in VS Code without intermediate build steps.
+- **Express 5 Engine**: Full compatibility with `http` and `httpApi` events, multi-value headers, route parameters (`{id}` and `{proxy+}`), query strings, and JSON or base64 payloads.
 
 ---
 
-## 🚀 Instalación
+## 🚀 Installation
 
-La forma recomendada de usar **FreeSLS** es instalarlo de manera **global** (`-g`), de modo que esté disponible como comando directo en cualquier proyecto:
+The recommended way to use **FreeSLS** is to install it **globally** (`-g`), making it available as a CLI command across any project:
 
 ```bash
-# Con npm (Recomendado)
+# With npm (Recommended)
 npm install -g freesls
 
-# O con pnpm
+# Or with pnpm
 pnpm add -g freesls
 
-# O con yarn
+# Or with yarn
 yarn global add freesls
 ```
 
-### Otras formas de uso:
+### Alternative Installation Options
 
-También puedes instalarlo como dependencia de desarrollo en tu proyecto:
+You can also install it as a project development dependency:
 
 ```bash
 npm install --save-dev freesls
-# o
+# or
 pnpm add -D freesls
 ```
 
-O ejecutarlo directamente sin instalar previamente usando `npx`:
+Or run it on the fly without installing using `npx`:
 
 ```bash
 npx freesls -s dev -p 4000
@@ -71,15 +75,15 @@ npx freesls -s dev -p 4000
 
 ---
 
-## 📖 Uso y Comandos
+## 📖 Usage & CLI Options
 
-Una vez instalado globalmente, puedes ejecutar `freesls` en cualquier carpeta que contenga un `serverless.yml`:
+Once installed globally, simply run `freesls` in any directory containing a `serverless.yml`:
 
 ```bash
 freesls -s dev -p 4000
 ```
 
-O agregar un script a tu `package.json`:
+Or add a script to your `package.json`:
 
 ```json
 {
@@ -89,82 +93,82 @@ O agregar un script a tu `package.json`:
 }
 ```
 
-### Opciones de CLI
+### CLI Flags
 
-| Opción       | Alias | Descripción                                                      | Valor por Defecto                |
-| ------------ | ----- | ---------------------------------------------------------------- | -------------------------------- |
-| `--stage`    | `-s`  | Stage de despliegue (`dev`, `staging`, `prod`)                   | `develop`                        |
-| `--region`   | `-r`  | Región de AWS para SSM y contexto Lambda                         | `us-east-1`                      |
-| `--port`     | `-p`  | Puerto HTTP para el servidor local                               | `4000`                           |
-| `--profile`  |       | Perfil de AWS CLI / AWS SSO                                      | Variables de entorno del sistema |
-| `--param`    |       | Parámetros clave=valor (se inyectan a `process.env`)             | `{}`                             |
-| `--no-ssm`   |       | Desactiva consultas a AWS SSM (usa `ssm.env`, fallbacks o mocks) | `false` (resuelve SSM real)      |
-| `--show-env` |       | Muestra los valores de variables sin enmascarar en consola       | `false` (enmascara secretos)     |
+| Flag         | Alias | Description                                                         | Default                          |
+| ------------ | ----- | ------------------------------------------------------------------- | -------------------------------- |
+| `--stage`    | `-s`  | Target deployment stage (`dev`, `staging`, `prod`)                  | `develop`                        |
+| `--region`   | `-r`  | AWS region for SSM and Lambda context                               | `us-east-1`                      |
+| `--port`     | `-p`  | HTTP port for the local server                                      | `4000`                           |
+| `--profile`  |       | AWS CLI / AWS SSO profile name                                      | System environment credentials   |
+| `--param`    |       | Custom key=value parameters (injected into `process.env`)           | `{}`                             |
+| `--no-ssm`   |       | Disables AWS SSM queries (uses `ssm.env`, YAML fallbacks, or mocks) | `false` (queries real AWS SSM)   |
+| `--show-env` |       | Displays full, unmasked environment variables in console            | `false` (masks sensitive values) |
 
-### Ejemplos comunes
+### Common Examples
 
 ```bash
-# Ejecutar en stage 'dev' en el puerto 4000 usando perfil AWS SSO
-freesls -s dev -p 4000 --profile mi-empresa-dev
+# Run in 'dev' stage on port 4000 using an AWS SSO profile
+freesls -s dev -p 4000 --profile my-org-dev
 
-# Ejecutar completamente offline sin conexión a AWS
+# Run completely offline without AWS credentials
 freesls -s local --no-ssm
 
-# Inyectar parámetros personalizados a process.env y ${param:...}
+# Inject custom parameters into process.env and ${param:...}
 freesls -s dev --param domain=api.local --param deploymentStage=dev
 
-# Ver valores de variables de entorno completas en la terminal sin enmascarar
+# Display all environment variable values in clear text
 freesls -s dev --show-env
 ```
 
 ---
 
-## 🔒 Modo Offline y Mocks de SSM (`--no-ssm`)
+## 🔒 Offline Mode & SSM Mocks (`--no-ssm`)
 
-Cuando ejecutas con `--no-ssm`, FreeSLS **no se conecta a AWS** y resuelve los parámetros `${ssm:/...}` siguiendo este orden de prioridad:
+When running with `--no-ssm`, FreeSLS **does not connect to AWS** and resolves `${ssm:/...}` parameters following this priority chain:
 
 ```
-1. Archivo ssm.env  ──►  2. Fallback en YAML  ──►  3. Mock automático de seguridad
+1. ssm.env file  ──►  2. YAML Fallback  ──►  3. Automatic Safety Mock
 ```
 
-### 1. Archivo `ssm.env` (en la raíz del proyecto)
+### 1. `ssm.env` File (in project root)
 
-Si creas un archivo `ssm.env` en la raíz de tu proyecto, FreeSLS cargará automáticamente los valores definidos allí:
+Create an `ssm.env` file in the root of your project to provide local mock values:
 
 ```env
 # ssm.env
 /my-app/dev/DATABASE_URL=postgres://postgres:localpass@localhost:5432/mydb
-/my-app/dev/JWT_SECRET=clave-secreta-de-desarrollo-local
+/my-app/dev/JWT_SECRET=local-development-secret-key
 API_KEY=local-dev-api-key
 ```
 
-### 2. Fallbacks de Serverless en `serverless.yml`
+### 2. Serverless YAML Fallbacks
 
-Si una variable no está en `ssm.env`, FreeSLS evaluará los fallbacks definidos en tu YAML:
+If a parameter is not defined in `ssm.env`, FreeSLS evaluates the fallback expressions defined in your `serverless.yml`:
 
 ```yaml
 provider:
   environment:
-    # Si no está en ssm.env, tomará 'localhost:6379'
+    # If not in ssm.env, falls back to 'localhost:6379'
     REDIS_HOST: ${ssm:/my-app/REDIS_HOST, 'localhost:6379'}
 
-    # Si no está en ssm.env, evaluará la variable de entorno DB_HOST
+    # If not in ssm.env, evaluates environment variable DB_HOST, then '127.0.0.1'
     DB_HOST: ${ssm:/my-app/DB_HOST, env:DB_HOST, '127.0.0.1'}
 ```
 
-### 3. Mock automático de seguridad
+### 3. Automatic Safety Mock
 
-Si el parámetro no está en `ssm.env` y tampoco tiene fallback en el YAML, FreeSLS generará automáticamente `mock-${nombre}` (ej. `${ssm:/infra/MI_VAR}` $\rightarrow$ `"mock-mi_var"`), evitando que tu aplicación falle por variables sin resolver.
+If a parameter is neither in `ssm.env` nor has a fallback in the YAML, FreeSLS automatically creates `mock-${parameterName}` (e.g. `${ssm:/infra/MY_PARAM}` $\rightarrow$ `"mock-my_param"`), ensuring your local service never crashes due to unresolved parameters.
 
 ---
 
-## 🔐 Seguridad y Enmascaramiento
+## 🔐 Security & Masking
 
-Por defecto, **FreeSLS** protege tus credenciales. En la terminal se mostrará un resumen de las variables cargadas, pero cualquier variable que contenga palabras clave como `KEY`, `SECRET`, `PASSWORD`, `TOKEN` o `AUTH` será enmascarada automáticamente:
+By default, **FreeSLS** protects sensitive values. When printing the environment summary, variables containing keywords such as `KEY`, `SECRET`, `PASSWORD`, `TOKEN`, or `AUTH` are automatically masked:
 
 ```
- 🐾 Environment Variables Loaded: (4 resueltas)
-   (Usa el flag --show-env para ver los valores completos sin enmascarar)
+ 🐾 Environment Variables Loaded: (4 resolved)
+   (Use --show-env flag to view full unmasked values)
 
    ✅ loaded   DATABASE_URL                 = postgres://...5432
    ✅ loaded   API_SECRET_KEY               = abcd...wxyz
@@ -173,9 +177,9 @@ Por defecto, **FreeSLS** protege tus credenciales. En la terminal se mostrará u
 
 ---
 
-## 🐞 Depuración con Breakpoints en VS Code
+## 🐞 VS Code Breakpoint Debugging
 
-Configurar la depuración en VS Code con **FreeSLS** es sumamente sencillo. Crea o actualiza tu archivo `.vscode/launch.json`:
+Configuring VS Code debugging with **FreeSLS** is straightforward. Add this configuration to your `.vscode/launch.json`:
 
 ```json
 {
@@ -186,7 +190,7 @@ Configurar la depuración en VS Code con **FreeSLS** es sumamente sencillo. Crea
       "type": "node",
       "request": "launch",
       "runtimeExecutable": "freesls",
-      "runtimeArgs": ["-s", "dev", "-p", "4000", "--profile", "tu-perfil-aws"],
+      "runtimeArgs": ["-s", "dev", "-p", "4000", "--profile", "your-aws-profile"],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "internalConsoleOptions": "neverOpen",
@@ -196,18 +200,18 @@ Configurar la depuración en VS Code con **FreeSLS** es sumamente sencillo. Crea
 }
 ```
 
-1. Coloca un punto de interrupción (breakpoint) en cualquier archivo de tu handler (`src/functions/.../handler.ts`).
-2. Presiona `F5` en VS Code.
-3. Envía una petición HTTP (usando Postman, cURL o tu frontend) a `http://localhost:4000/...`.
-4. El breakpoint se activará inmediatamente en tu código TypeScript original con acceso a variables locales y pila de llamadas.
+1. Set a breakpoint in any Lambda handler (`src/functions/.../handler.ts`).
+2. Press `F5` in VS Code.
+3. Send an HTTP request (via Postman, cURL, or frontend) to `http://localhost:4000/...`.
+4. The breakpoint will hit instantly in your original TypeScript source with full inspection and call stack support.
 
 ---
 
-## 📄 Sintaxis de `serverless.yml` Soportada
+## 📄 Supported `serverless.yml` Syntax
 
-### 1. Eventos HTTP
+### 1. HTTP Events
 
-Soporta sintaxis en cadena y en formato objeto:
+Supports both string and object formats:
 
 ```yaml
 functions:
@@ -229,13 +233,13 @@ functions:
           method: ANY
 ```
 
-### 2. Formato de Handlers
+### 2. Handler Resolution
 
-FreeSLS ubica automáticamente handlers en:
+FreeSLS automatically locates handlers at:
 
-- `src/handlers/user.get` $\rightarrow$ Busca `src/handlers/user.ts`, `src/handlers/user.js` o `src/handlers/user/index.ts` y extrae la función nombrada `get` (o `default`).
+- `src/handlers/user.get` $\rightarrow$ Resolves `src/handlers/user.ts`, `src/handlers/user.js`, or `src/handlers/user/index.ts` and exports the named function `get` (or `default`).
 
-### 3. Resolución de Variables y Fallbacks
+### 3. Variable Resolution & Fallbacks
 
 ```yaml
 provider:
@@ -251,41 +255,41 @@ provider:
 
 ---
 
-## 🛠️ Desarrollo del Proyecto
+## 🛠️ Local Development & Contributing
 
-Si deseas clonar y contribuir a **FreeSLS**:
+To clone and contribute to **FreeSLS**:
 
 ```bash
 git clone https://github.com/qwery2052/freesls.git
 cd freesls
 
-# Instalar dependencias
+# Install dependencies
 npm install
 
-# Compilar código TypeScript
+# Compile TypeScript
 npm run build
 
-# Modo observador (watch)
+# Watch mode
 npm run watch
 
-# Formatear con Prettier
+# Format code
 npm run format
 ```
 
 ---
 
-## 🤝 Contribuir
+## 🤝 Contributing
 
-¡Las contribuciones son bienvenidas! Siéntete libre de abrir un _Issue_ o enviar un _Pull Request_:
+Contributions are welcome! Feel free to open an Issue or submit a Pull Request:
 
-1. Haz un Fork del repositorio.
-2. Crea tu rama de características (`git checkout -b feature/nueva-funcionalidad`).
-3. Confirma tus cambios (`git commit -m 'feat: agregar nueva funcionalidad'`).
-4. Haz push a tu rama (`git push origin feature/nueva-funcionalidad`).
-5. Abre un Pull Request.
+1. Fork the repository.
+2. Create a feature branch (`git checkout -b feature/my-new-feature`).
+3. Commit your changes (`git commit -m 'feat: add awesome feature'`).
+4. Push to the branch (`git push origin feature/my-new-feature`).
+5. Open a Pull Request.
 
 ---
 
-## 📜 Licencia
+## 📜 License
 
-Este proyecto está bajo la Licencia MIT. Consulta el archivo [LICENSE](LICENSE) para más detalles.
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
