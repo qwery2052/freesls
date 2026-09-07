@@ -25,6 +25,12 @@
 ────────────────────────────────────────────────────────────
 ```
 
+> [!NOTE]
+> **Active Development & Current Scope**
+>
+> - 🚧 **Work in Progress:** FreeSLS is under active and continuous development. Improvements, fixes, and new features are being released regularly.
+> - ⚡ **Current Scope:** FreeSLS currently focuses specifically on running **AWS Lambda functions invoked via HTTP and HTTP API events (API Gateway)**. Support for additional triggers (such as SQS, SNS, EventBridge, S3) is planned for upcoming releases. Feedback and suggestions are warmly welcomed!
+
 ---
 
 ## 💡 Why FreeSLS?

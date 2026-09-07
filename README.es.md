@@ -25,6 +25,12 @@
 ────────────────────────────────────────────────────────────
 ```
 
+> [!NOTE]
+> **En Desarrollo Activo y Alcance Actual**
+>
+> - 🚧 **En Desarrollo Continuo:** FreeSLS se encuentra en desarrollo activo y constante evolución. Se están incorporando mejoras, correcciones y nuevas capacidades continuamente.
+> - ⚡ **Alcance Actual:** Por el momento, FreeSLS funciona exclusivamente con **funciones AWS Lambda invocadas mediante eventos HTTP y HTTP API (API Gateway)**. El soporte para otros desencadenadores (SQS, SNS, EventBridge, S3, etc.) está proyectado para futuras versiones. ¡El feedback y los aportes son bienvenidos!
+
 ---
 
 ## 💡 ¿Por qué FreeSLS?
