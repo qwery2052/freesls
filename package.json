@@ -1,7 +1,7 @@
 {
   "name": "freesls",
   "version": "0.1.0",
-  "description": "",
+  "description": "Offline API Gateway & AWS Lambda runner for Serverless Framework with TypeScript and SSM support",
   "type": "module",
   "bin": {
     "freesls": "./dist/cli.js"
@@ -14,13 +14,34 @@
     "watch": "tsc --watch",
     "debug": "npm run build && node dist/cli.js -s dev -p 4000 --profile myth-dev --show-env",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "prepublishOnly": "npm run build"
   },
-  "keywords": [],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/qwery2052/freesls.git"
+  },
+  "bugs": {
+    "url": "https://github.com/qwery2052/freesls/issues"
+  },
+  "homepage": "https://github.com/qwery2052/freesls#readme",
+  "keywords": [
+    "serverless",
+    "offline",
+    "aws",
+    "lambda",
+    "api-gateway",
+    "ssm",
+    "typescript",
+    "local-development"
+  ],
   "author": "myth_dev",
   "license": "MIT",
   "publishConfig": {
     "access": "public"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
