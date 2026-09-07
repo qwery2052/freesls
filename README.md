@@ -27,10 +27,11 @@
 
 Las herramientas tradicionales de emulación local para Serverless Framework a menudo requieren plugins pesados, configuraciones complejas de Webpack/esbuild, o presentan dificultades al conectar con AWS SSM Parameter Store y al configurar breakpoints en VS Code.
 
-**FreeSLS** nace para ofrecer una alternativa:
+**FreeSLS** ofrece una alternativa moderna, minimalista y ultra-rápida:
 
 - **Cero configuración de compilación**: Ejecuta archivos TypeScript (`.ts`, `.tsx`) y JavaScript (`.js`, `.mjs`, `.cjs`) directamente usando [jiti](https://github.com/unjs/jiti) con source maps integrados.
-- **Resolución real de AWS SSM**: Consulta parámetros reales de AWS Parameter Store respetando tus perfiles de AWS SSO/CLI, o genera mocks automáticos si estás sin conexión (`--no-ssm`).
+- **Resolución real de AWS SSM o Mocks locales**: Consulta parámetros reales de AWS Parameter Store respetando tus perfiles de AWS SSO/CLI, o ejecuta offline con `--no-ssm` usando `ssm.env`, fallbacks o mocks automáticos.
+- **Inyección de parámetros**: Parámetros pasados vía `--param clave=valor` se inyectan automáticamente en `process.env`.
 - **Resolución avanzada de variables**: Soporta sintaxis como `${self:...}`, `${opt:...}`, `${env:...}`, `${param:...}`, `${aws:...}` y cadenas de fallback (`${ssm:/path, env:VAR, 'fallback'}`).
 - **Depuración instantánea**: Coloca breakpoints en tus funciones Lambda y depúralos en VS Code sin pasos de build intermedios.
 - **Emulador Express 5**: Compatible con eventos `http` y `httpApi`, cabeceras multi-valor, parámetros de ruta (`{id}` y `{proxy+}`), query strings y payloads en JSON o base64.
@@ -39,17 +40,30 @@ Las herramientas tradicionales de emulación local para Serverless Framework a m
 
 ## 🚀 Instalación
 
-Puedes instalarlo como dependencia de desarrollo en tu proyecto:
+La forma recomendada de usar **FreeSLS** es instalarlo de manera **global** (`-g`), de modo que esté disponible como comando directo en cualquier proyecto:
+
+```bash
+# Con npm (Recomendado)
+npm install -g freesls
+
+# O con pnpm
+pnpm add -g freesls
+
+# O con yarn
+yarn global add freesls
+```
+
+### Otras formas de uso:
+
+También puedes instalarlo como dependencia de desarrollo en tu proyecto:
 
 ```bash
 npm install --save-dev freesls
-# o con pnpm
+# o
 pnpm add -D freesls
-# o con yarn
-yarn add -D freesls
 ```
 
-O ejecutarlo directamente sin instalar usando `npx`:
+O ejecutarlo directamente sin instalar previamente usando `npx`:
 
 ```bash
 npx freesls -s dev -p 4000
@@ -59,7 +73,13 @@ npx freesls -s dev -p 4000
 
 ## 📖 Uso y Comandos
 
-Agrega un script a tu `package.json`:
+Una vez instalado globalmente, puedes ejecutar `freesls` en cualquier carpeta que contenga un `serverless.yml`:
+
+```bash
+freesls -s dev -p 4000
+```
+
+O agregar un script a tu `package.json`:
 
 ```json
 {
@@ -71,31 +91,70 @@ Agrega un script a tu `package.json`:
 
 ### Opciones de CLI
 
-| Opción       | Alias | Descripción                                                | Valor por Defecto                |
-| ------------ | ----- | ---------------------------------------------------------- | -------------------------------- |
-| `--stage`    | `-s`  | Stage de despliegue (`dev`, `staging`, `prod`)             | `develop`                        |
-| `--region`   | `-r`  | Región de AWS para SSM y contexto Lambda                   | `us-east-1`                      |
-| `--port`     | `-p`  | Puerto HTTP para el servidor local                         | `4000`                           |
-| `--profile`  |       | Perfil de AWS CLI / AWS SSO                                | Variables de entorno del sistema |
-| `--param`    |       | Parámetros personalizados clave=valor (`--param foo=bar`)  | `{}`                             |
-| `--no-ssm`   |       | Desactiva consultas a AWS SSM y usa valores mock           | `false` (resuelve SSM real)      |
-| `--show-env` |       | Muestra los valores de variables sin enmascarar en consola | `false` (enmascara secretos)     |
+| Opción       | Alias | Descripción                                                      | Valor por Defecto                |
+| ------------ | ----- | ---------------------------------------------------------------- | -------------------------------- |
+| `--stage`    | `-s`  | Stage de despliegue (`dev`, `staging`, `prod`)                   | `develop`                        |
+| `--region`   | `-r`  | Región de AWS para SSM y contexto Lambda                         | `us-east-1`                      |
+| `--port`     | `-p`  | Puerto HTTP para el servidor local                               | `4000`                           |
+| `--profile`  |       | Perfil de AWS CLI / AWS SSO                                      | Variables de entorno del sistema |
+| `--param`    |       | Parámetros clave=valor (se inyectan a `process.env`)             | `{}`                             |
+| `--no-ssm`   |       | Desactiva consultas a AWS SSM (usa `ssm.env`, fallbacks o mocks) | `false` (resuelve SSM real)      |
+| `--show-env` |       | Muestra los valores de variables sin enmascarar en consola       | `false` (enmascara secretos)     |
 
 ### Ejemplos comunes
 
 ```bash
 # Ejecutar en stage 'dev' en el puerto 4000 usando perfil AWS SSO
-npx freesls -s dev -p 4000 --profile mi-empresa-dev
+freesls -s dev -p 4000 --profile mi-empresa-dev
 
-# Ejecutar completamente offline sin credenciales de AWS (usa mocks)
-npx freesls -s local --no-ssm
+# Ejecutar completamente offline sin conexión a AWS
+freesls -s local --no-ssm
 
-# Pasar parámetros personalizados equivalentes a Serverless --param
-npx freesls -s dev --param domain=api.local --param deploymentStage=dev
+# Inyectar parámetros personalizados a process.env y ${param:...}
+freesls -s dev --param domain=api.local --param deploymentStage=dev
 
-# Ver valores de variables de entorno completas en la terminal
-npx freesls -s dev --show-env
+# Ver valores de variables de entorno completas en la terminal sin enmascarar
+freesls -s dev --show-env
 ```
+
+---
+
+## 🔒 Modo Offline y Mocks de SSM (`--no-ssm`)
+
+Cuando ejecutas con `--no-ssm`, FreeSLS **no se conecta a AWS** y resuelve los parámetros `${ssm:/...}` siguiendo este orden de prioridad:
+
+```
+1. Archivo ssm.env  ──►  2. Fallback en YAML  ──►  3. Mock automático de seguridad
+```
+
+### 1. Archivo `ssm.env` (en la raíz del proyecto)
+
+Si creas un archivo `ssm.env` en la raíz de tu proyecto, FreeSLS cargará automáticamente los valores definidos allí:
+
+```env
+# ssm.env
+/my-app/dev/DATABASE_URL=postgres://postgres:localpass@localhost:5432/mydb
+/my-app/dev/JWT_SECRET=clave-secreta-de-desarrollo-local
+API_KEY=local-dev-api-key
+```
+
+### 2. Fallbacks de Serverless en `serverless.yml`
+
+Si una variable no está en `ssm.env`, FreeSLS evaluará los fallbacks definidos en tu YAML:
+
+```yaml
+provider:
+  environment:
+    # Si no está en ssm.env, tomará 'localhost:6379'
+    REDIS_HOST: ${ssm:/my-app/REDIS_HOST, 'localhost:6379'}
+
+    # Si no está en ssm.env, evaluará la variable de entorno DB_HOST
+    DB_HOST: ${ssm:/my-app/DB_HOST, env:DB_HOST, '127.0.0.1'}
+```
+
+### 3. Mock automático de seguridad
+
+Si el parámetro no está en `ssm.env` y tampoco tiene fallback en el YAML, FreeSLS generará automáticamente `mock-${nombre}` (ej. `${ssm:/infra/MI_VAR}` $\rightarrow$ `"mock-mi_var"`), evitando que tu aplicación falle por variables sin resolver.
 
 ---
 
@@ -126,8 +185,8 @@ Configurar la depuración en VS Code con **FreeSLS** es sumamente sencillo. Crea
       "name": "FreeSLS: Debug Local",
       "type": "node",
       "request": "launch",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["freesls", "-s", "dev", "-p", "4000", "--profile", "tu-perfil-aws"],
+      "runtimeExecutable": "freesls",
+      "runtimeArgs": ["-s", "dev", "-p", "4000", "--profile", "tu-perfil-aws"],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "internalConsoleOptions": "neverOpen",
