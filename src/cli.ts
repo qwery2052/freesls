@@ -28,7 +28,7 @@ function parseCliParameters(parameterEntries?: string[]): Record<string, string>
 program
   .name("freesls")
   .description("Offline API Gateway & Lambda Runner")
-  .version("0.1.1")
+  .version("0.1.2")
   .option("-s, --stage <stage>", "Stage de despliegue", "develop")
   .option("-r, --region <region>", "Región de AWS", "us-east-1")
   .option("-p, --port <port>", "Puerto del servidor local", "4000")
