@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parse } from "yaml";
+import pc from "picocolors";
 import type { ServerlessConfig, RouteDefinition, LoadResult } from "./types.js";
 import { SSMResolver } from "./ssm.js";
 import { extractSSMPaths, resolveVariables, type ResolveContext } from "./resolver.js";
@@ -49,24 +50,64 @@ function resolveEnvironmentVariables(
 }
 
 /**
- * Resuelve valores SSM consultando AWS o generando mocks.
+ * Carga valores de mock desde el archivo ssm.env ubicado en la raíz del proyecto.
+ */
+function loadSSMEnvFile(workingDirectory: string): Map<string, string> {
+  const ssmEnvFilePath = path.resolve(workingDirectory, "ssm.env");
+  const ssmValuesMap = new Map<string, string>();
+
+  if (!fs.existsSync(ssmEnvFilePath)) {
+    return ssmValuesMap;
+  }
+
+  const ssmEnvContent = fs.readFileSync(ssmEnvFilePath, "utf-8");
+  const fileLines = ssmEnvContent.split(/\r?\n/);
+
+  for (const rawLine of fileLines) {
+    const trimmedLine = rawLine.trim();
+    if (!trimmedLine || trimmedLine.startsWith("#")) continue;
+
+    const assignmentIndex = trimmedLine.indexOf("=");
+    if (assignmentIndex === -1) continue;
+
+    const parameterKey = trimmedLine.slice(0, assignmentIndex).trim();
+    const parameterValue = trimmedLine.slice(assignmentIndex + 1).trim();
+
+    if (parameterKey) {
+      ssmValuesMap.set(parameterKey, parameterValue);
+      if (parameterKey.startsWith("/")) {
+        ssmValuesMap.set(parameterKey.slice(1), parameterValue);
+      } else {
+        ssmValuesMap.set(`/${parameterKey}`, parameterValue);
+      }
+    }
+  }
+
+  return ssmValuesMap;
+}
+
+/**
+ * Resuelve valores SSM consultando AWS o cargando mocks locales desde ssm.env.
  */
 async function resolveSSMValues(
   parameterPaths: string[],
   region: string,
   resolveSSM = false,
+  workingDirectory = process.cwd(),
 ): Promise<Map<string, string>> {
   if (resolveSSM) {
     const ssmResolver = new SSMResolver(region);
     return ssmResolver.resolveAll(parameterPaths);
   }
 
-  return new Map(
-    parameterPaths.map(parameterPath => {
-      const variableName = parameterPath.split("/").pop() || "value";
-      return [parameterPath, `mock-${variableName.toLowerCase()}`];
-    }),
-  );
+  const ssmMocksFromEnv = loadSSMEnvFile(workingDirectory);
+  if (ssmMocksFromEnv.size > 0) {
+    console.log(pc.dim(`🐾 SSM offline: cargados mocks desde ssm.env`));
+  } else {
+    console.log(pc.dim(`🐾 SSM offline: operando con fallbacks y mocks locales`));
+  }
+
+  return ssmMocksFromEnv;
 }
 
 /**
@@ -160,7 +201,12 @@ export async function loadServerlessConfig(
 
   // PASADA 2: Extraer rutas SSM y resolverlas (AWS o mocks)
   const ssmParameterPaths = extractSSMPaths(resolvedYamlPass1);
-  context.ssmValues = await resolveSSMValues(ssmParameterPaths, options.region, options.resolveSSM);
+  context.ssmValues = await resolveSSMValues(
+    ssmParameterPaths,
+    options.region,
+    options.resolveSSM,
+    workingDirectory,
+  );
 
   // PASADA 3: Inyectar valores de SSM y resolver fallbacks
   const finalConfig = parseYaml<ServerlessConfig>(resolvedYamlPass1);

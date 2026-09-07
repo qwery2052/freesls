@@ -82,7 +82,7 @@ function resolveSingleTerm(
       const ssmKey = trimmedExpression.split("~")[0].trim();
       if (context.ssmValues) {
         const ssmValue = context.ssmValues.get(ssmKey) ?? context.ssmValues.get(trimmedExpression);
-        if (ssmValue) return ssmValue;
+        if (ssmValue !== undefined && ssmValue !== null) return ssmValue;
       }
       return null;
     }
@@ -108,6 +108,18 @@ function resolveExpressionWithFallbacks(
     const resolvedValue = resolveSingleTerm(expressionPart, context, resolveSSM);
     if (resolvedValue !== null) {
       return resolvedValue;
+    }
+  }
+
+  // Si estamos en la pasada final (resolveSSM === true) y ningún término resolvió,
+  // pero el primer término era un ssm (ej. ${ssm:/ruta/parametro}),
+  // generamos el mock automático de salvavidas para asegurar que nunca quede una variable sin resolver
+  if (resolveSSM && fallbackParts.length > 0) {
+    const initialTerm = fallbackParts[0]?.trim() || "";
+    if (initialTerm.startsWith("ssm:")) {
+      const parameterPath = initialTerm.slice(4).split("~")[0].trim();
+      const parameterLeafName = parameterPath.split("/").pop() || "value";
+      return `mock-${parameterLeafName.toLowerCase()}`;
     }
   }
 

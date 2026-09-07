@@ -51,6 +51,10 @@ program
 
       const customParameters = parseCliParameters(commandOptions.param);
 
+      for (const [parameterKey, parameterValue] of Object.entries(customParameters)) {
+        process.env[parameterKey] = parameterValue;
+      }
+
       console.log(
         pc.dim(`\n🐾 Inicializando FreeSLS en stage: ${pc.bold(commandOptions.stage)}...`),
       );
