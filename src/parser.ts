@@ -22,7 +22,7 @@ const customTags = cloudFormationTags.map(tagName => ({
     typeof resolvedValue === "string" ? resolvedValue : JSON.stringify(resolvedValue),
 }));
 
-const parseYaml = <ParsedResult = any>(yamlContent: string): ParsedResult =>
+export const parseYaml = <ParsedResult = any>(yamlContent: string): ParsedResult =>
   parse(yamlContent, { customTags });
 
 export interface ParserOptions {
@@ -35,7 +35,7 @@ export interface ParserOptions {
 /**
  * Resuelve un diccionario de variables de entorno usando el contexto.
  */
-function resolveEnvironmentVariables(
+export function resolveEnvironmentVariables(
   environmentVariables: Record<string, unknown> | undefined,
   context: ResolveContext,
   baseEnvironment: Record<string, string> = {},
@@ -89,7 +89,7 @@ function loadSSMEnvFile(workingDirectory: string): Map<string, string> {
 /**
  * Resuelve valores SSM consultando AWS o cargando mocks locales desde ssm.env.
  */
-async function resolveSSMValues(
+export async function resolveSSMValues(
   parameterPaths: string[],
   region: string,
   resolveSSM = false,
@@ -218,5 +218,5 @@ export async function loadServerlessConfig(
   // Extrae y resuelve las rutas definidas en functions
   const routeDefinitions = extractRoutes(finalConfig.functions, globalEnvironment, context);
 
-  return { config: finalConfig, routes: routeDefinitions, globalEnv: globalEnvironment };
+  return { config: finalConfig, routes: routeDefinitions, globalEnv: globalEnvironment, framework: "serverless" };
 }

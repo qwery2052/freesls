@@ -18,9 +18,19 @@ export function formatMethod(httpMethod: string): string {
   return formatBadge(` ${normalizedMethod} `);
 }
 
-export function printBanner(serviceName: string, port: number, stage: string) {
+export function printBanner(
+  serviceName: string,
+  port: number,
+  stage: string,
+  framework: "serverless" | "sam" = "serverless",
+) {
+  const frameworkBadge =
+    framework === "sam"
+      ? pc.bold(pc.bgYellow(pc.black(" AWS SAM ")))
+      : pc.bold(pc.bgMagenta(pc.white(" SLS ")));
+
   const bannerArt = `
-   ${pc.magenta("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.1.3")}
+   ${pc.magenta("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.2.0")}  ${frameworkBadge}
   ${pc.magenta("( o.o )")}  ${pc.dim("Offline API Gateway & Lambda Runner")}
    ${pc.magenta("> ^ <")}   ${pc.green("●")} Service: ${pc.bold(serviceName)} ${pc.dim(`[stage: ${stage}]`)}
   `;
