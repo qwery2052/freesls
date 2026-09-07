@@ -5,7 +5,7 @@
 # 🐾 FreeSLS
 
 <p align="center">
-  <b>Offline API Gateway & AWS Lambda Runner for Serverless Framework</b><br>
+  <b>Offline API Gateway & AWS Lambda Runner for Serverless Framework & AWS SAM</b><br>
   Ligero, rápido, con soporte nativo de TypeScript, resolución de AWS SSM y depuración con breakpoints al instante.
 </p>
 
@@ -17,7 +17,7 @@
 </p>
 
 ```
-   /\_/\   FreeSLS v0.1.0
+   /\_/\   FreeSLS v0.2.0  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
    > ^ <   ● Service: user-management-api [stage: dev]
 ────────────────────────────────────────────────────────────
@@ -29,20 +29,21 @@
 > **En Desarrollo Activo y Alcance Actual**
 >
 > - 🚧 **En Desarrollo Continuo:** FreeSLS se encuentra en desarrollo activo y constante evolución. Se están incorporando mejoras, correcciones y nuevas capacidades continuamente.
-> - ⚡ **Alcance Actual:** Por el momento, FreeSLS funciona exclusivamente con **funciones AWS Lambda invocadas mediante eventos HTTP y HTTP API (API Gateway)**. El soporte para otros desencadenadores (SQS, SNS, EventBridge, S3, etc.) está proyectado para futuras versiones. ¡El feedback y los aportes son bienvenidos!
+> - ⚡ **Alcance Actual:** Por el momento, FreeSLS funciona exclusivamente con **funciones AWS Lambda invocadas mediante eventos HTTP y HTTP API (API Gateway)** tanto para **Serverless Framework** (`serverless.yml`) como para **AWS SAM** (`template.yaml` / `template.yml`). El soporte para otros desencadenadores (SQS, SNS, EventBridge, S3, etc.) está proyectado para futuras versiones. ¡El feedback y los aportes son bienvenidos!
 
 ---
 
 ## 💡 ¿Por qué FreeSLS?
 
-Las herramientas tradicionales de emulación local para Serverless Framework a menudo requieren plugins pesados, configuraciones complejas de Webpack/esbuild, o presentan dificultades al conectar con AWS SSM Parameter Store y al configurar breakpoints en VS Code.
+Las herramientas tradicionales de emulación local para Serverless Framework y AWS SAM a menudo requieren plugins pesados, configuraciones complejas de build, o presentan dificultades al conectar con AWS SSM Parameter Store y al configurar breakpoints en VS Code.
 
 **FreeSLS** ofrece una alternativa moderna, minimalista y ultra-rápida:
 
+- **Soporte Dual de Frameworks**: Ejecuta proyectos de **Serverless Framework** (`serverless.yml`) y **AWS SAM** (`template.yaml` / `template.yml`) con la misma herramienta.
 - **Cero configuración de compilación**: Ejecuta archivos TypeScript (`.ts`, `.tsx`) y JavaScript (`.js`, `.mjs`, `.cjs`) directamente usando [jiti](https://github.com/unjs/jiti) con source maps integrados.
 - **Resolución real de AWS SSM o Mocks locales**: Consulta parámetros reales de AWS Parameter Store respetando tus perfiles de AWS SSO/CLI, o ejecuta offline con `--no-ssm` usando `ssm.env`, fallbacks o mocks automáticos.
 - **Inyección de parámetros**: Parámetros pasados vía `--param clave=valor` se inyectan automáticamente en `process.env`.
-- **Resolución avanzada de variables**: Soporta sintaxis como `${self:...}`, `${opt:...}`, `${env:...}`, `${param:...}`, `${aws:...}` y cadenas de fallback (`${ssm:/path, env:VAR, 'fallback'}`).
+- **Resolución avanzada de variables**: Soporta sintaxis como `${self:...}`, `${opt:...}`, `${env:...}`, `${param:...}`, `${aws:...}`, pseudo-parámetros CloudFormation (`${AWS::Region}`, `${AWS::AccountId}`) y cadenas de fallback (`${ssm:/path, env:VAR, 'fallback'}`).
 - **Depuración instantánea**: Coloca breakpoints en tus funciones Lambda y depúralos en VS Code sin pasos de build intermedios.
 - **Emulador Express 5**: Compatible con eventos `http` y `httpApi`, cabeceras multi-valor, parámetros de ruta (`{id}` y `{proxy+}`), query strings y payloads en JSON o base64.
 
@@ -83,10 +84,14 @@ npx freesls -s dev -p 4000
 
 ## 📖 Uso y Comandos
 
-Una vez instalado globalmente, puedes ejecutar `freesls` en cualquier carpeta que contenga un `serverless.yml`:
+Por defecto, FreeSLS busca `serverless.yml`. Para ejecutar un proyecto de AWS SAM, simplemente agrega `-sam` (o `--sam`):
 
 ```bash
+# Serverless Framework (por defecto)
 freesls -s dev -p 4000
+
+# AWS SAM (template.yaml / template.yml)
+freesls -sam -s dev -p 4000
 ```
 
 O agregar un script a tu `package.json`:
@@ -94,28 +99,34 @@ O agregar un script a tu `package.json`:
 ```json
 {
   "scripts": {
-    "offline": "freesls -s dev -p 4000 --profile my-aws-profile"
+    "offline": "freesls -s dev -p 4000 --profile mi-perfil-aws",
+    "offline:sam": "freesls -sam -s dev -p 4000 --profile mi-perfil-aws"
   }
 }
 ```
 
 ### Opciones de CLI
 
-| Opción       | Alias | Descripción                                                      | Valor por Defecto                |
-| ------------ | ----- | ---------------------------------------------------------------- | -------------------------------- |
-| `--stage`    | `-s`  | Stage de despliegue (`dev`, `staging`, `prod`)                   | `develop`                        |
-| `--region`   | `-r`  | Región de AWS para SSM y contexto Lambda                         | `us-east-1`                      |
-| `--port`     | `-p`  | Puerto HTTP para el servidor local                               | `4000`                           |
-| `--profile`  |       | Perfil de AWS CLI / AWS SSO                                      | Variables de entorno del sistema |
-| `--param`    |       | Parámetros clave=valor (se inyectan a `process.env`)             | `{}`                             |
-| `--no-ssm`   |       | Desactiva consultas a AWS SSM (usa `ssm.env`, fallbacks o mocks) | `false` (resuelve SSM real)      |
-| `--show-env` |       | Muestra los valores de variables sin enmascarar en consola       | `false` (enmascara secretos)     |
+| Opción       | Alias   | Descripción                                                      | Valor por Defecto                |
+| ------------ | ------- | ---------------------------------------------------------------- | -------------------------------- |
+| `--sam`      | `-sam`  | Usa template de AWS SAM (`template.yaml` / `template.yml`)       | `false`                          |
+| `--sls`      | `-sls`  | Usa template de Serverless Framework (`serverless.yml`)          | `true` (por defecto)             |
+| `--stage`    | `-s`    | Stage de despliegue (`dev`, `staging`, `prod`)                   | `develop`                        |
+| `--region`   | `-r`    | Región de AWS para SSM y contexto Lambda                         | `us-east-1`                      |
+| `--port`     | `-p`    | Puerto HTTP para el servidor local                               | `4000`                           |
+| `--profile`  |         | Perfil de AWS CLI / AWS SSO                                      | Variables de entorno del sistema |
+| `--param`    |         | Parámetros clave=valor (se inyectan a `process.env`)             | `{}`                             |
+| `--no-ssm`   |         | Desactiva consultas a AWS SSM (usa `ssm.env`, fallbacks o mocks) | `false` (resuelve SSM real)      |
+| `--show-env` |         | Muestra los valores de variables sin enmascarar en consola       | `false` (enmascara secretos)     |
 
 ### Ejemplos comunes
 
 ```bash
-# Ejecutar en stage 'dev' en el puerto 4000 usando perfil AWS SSO
+# Ejecutar Serverless Framework en stage 'dev' en el puerto 4000 usando perfil AWS SSO
 freesls -s dev -p 4000 --profile mi-empresa-dev
+
+# Ejecutar proyecto AWS SAM en stage 'dev'
+freesls -sam -s dev -p 4000 --profile mi-empresa-dev
 
 # Ejecutar completamente offline sin conexión a AWS
 freesls -s local --no-ssm
@@ -170,13 +181,13 @@ Si el parámetro no está en `ssm.env` y tampoco tiene fallback en el YAML, Free
 
 ## 🔐 Seguridad y Enmascaramiento
 
-Por defecto, **FreeSLS** protege tus credenciales. En la terminal se mostrará un resumen de las variables cargadas, pero cualquier variable que contenga palabras clave como `KEY`, `SECRET`, `PASSWORD`, `TOKEN` o `AUTH` será enmascarada automáticamente:
+Por defecto, **FreeSLS** protege tus credenciales. En la terminal se mostrará un resumen de las variables cargadas, pero **todas las variables resueltas** (`✅ loaded`) serán enmascaradas automáticamente para evitar la exposición accidental de secretos, URLs de base de datos o endpoints internos:
 
 ```
  🐾 Environment Variables Loaded: (4 resueltas)
    (Usa el flag --show-env para ver los valores completos sin enmascarar)
 
-   ✅ loaded   DATABASE_URL                 = postgres://...5432
+   ✅ loaded   DATABASE_URL                 = post...5432
    ✅ loaded   API_SECRET_KEY               = abcd...wxyz
    ⚠️  mocked   STRIPE_KEY                   = mock-stripe_key
 ```
@@ -192,11 +203,22 @@ Configurar la depuración en VS Code con **FreeSLS** es sumamente sencillo. Crea
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "FreeSLS: Debug Local",
+      "name": "FreeSLS: Debug Serverless",
       "type": "node",
       "request": "launch",
       "runtimeExecutable": "freesls",
       "runtimeArgs": ["-s", "dev", "-p", "4000", "--profile", "tu-perfil-aws"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "FreeSLS: Debug SAM",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "freesls",
+      "runtimeArgs": ["-sam", "-s", "dev", "-p", "4000", "--profile", "tu-perfil-aws"],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "internalConsoleOptions": "neverOpen",
