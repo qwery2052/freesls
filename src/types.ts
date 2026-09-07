@@ -39,6 +39,7 @@ export interface LoadResult {
   config: ServerlessConfig;
   routes: RouteDefinition[];
   globalEnv: Record<string, string>;
+  framework?: "serverless" | "sam";
 }
 
 export interface APIGatewayProxyEvent {

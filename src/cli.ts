@@ -3,6 +3,7 @@
 import { Command } from "commander";
 import pc from "picocolors";
 import { loadServerlessConfig } from "./parser.js";
+import { loadSamConfig } from "./sam-parser.js";
 import { printBanner, printEnvironmentSummary, printRoutes } from "./printer.js";
 import { startServer } from "./server.js";
 
@@ -27,13 +28,15 @@ function parseCliParameters(parameterEntries?: string[]): Record<string, string>
 
 program
   .name("freesls")
-  .description("Offline API Gateway & Lambda Runner")
-  .version("0.1.2")
+  .description("Offline API Gateway & Lambda Runner (Serverless Framework & AWS SAM)")
+  .version("0.2.0")
   .option("-s, --stage <stage>", "Stage de despliegue", "develop")
   .option("-r, --region <region>", "Región de AWS", "us-east-1")
   .option("-p, --port <port>", "Puerto del servidor local", "4000")
   .option("--profile <profile>", "Perfil AWS CLI/SSO para credenciales")
   .option("--param <params...>", "Parámetros en formato clave=valor (ej. deploymentStage=develop)")
+  .option("--sam", "Usa template de AWS SAM (template.yaml/template.yml)")
+  .option("--sls", "Usa template de Serverless Framework (serverless.yml/serverless.yaml) [por defecto]")
   .option("--no-ssm", "Desactiva la resolución real de SSM y usa mocks")
   .option(
     "--show-env",
@@ -55,18 +58,37 @@ program
         process.env[parameterKey] = parameterValue;
       }
 
+      // Detecta si se solicitó modo SAM vía --sam o el alias -sam
+      const isSamMode =
+        Boolean(commandOptions.sam) ||
+        process.argv.includes("-sam") ||
+        process.argv.includes("--sam");
+
+      const frameworkDisplayName = isSamMode ? "AWS SAM" : "Serverless Framework";
+
       console.log(
-        pc.dim(`\n🐾 Inicializando FreeSLS en stage: ${pc.bold(commandOptions.stage)}...`),
+        pc.dim(
+          `\n🐾 Inicializando FreeSLS (${pc.cyan(frameworkDisplayName)}) en stage: ${pc.bold(commandOptions.stage)}...`,
+        ),
       );
 
-      const { config, routes, globalEnv } = await loadServerlessConfig(process.cwd(), {
+      const parserOptions = {
         stage: commandOptions.stage,
         region: commandOptions.region,
         params: customParameters,
         resolveSSM: commandOptions.ssm !== false,
-      });
+      };
 
-      printBanner(config.service || "service", serverPort, commandOptions.stage);
+      const { config, routes, globalEnv, framework } = isSamMode
+        ? await loadSamConfig(process.cwd(), parserOptions)
+        : await loadServerlessConfig(process.cwd(), parserOptions);
+
+      printBanner(
+        config.service || "service",
+        serverPort,
+        commandOptions.stage,
+        framework || (isSamMode ? "sam" : "serverless"),
+      );
       printEnvironmentSummary(globalEnv, Boolean(commandOptions.showEnv));
       printRoutes(routes, serverPort);
 
@@ -90,4 +112,10 @@ program
     }
   });
 
-program.parse(process.argv);
+const normalizedArgv = process.argv.map(arg => {
+  if (arg === "-sam") return "--sam";
+  if (arg === "-sls") return "--sls";
+  return arg;
+});
+
+program.parse(normalizedArgv);
