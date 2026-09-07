@@ -1,6 +1,6 @@
 {
   "name": "freesls",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Offline API Gateway & AWS Lambda runner for Serverless Framework with TypeScript and SSM support",
   "type": "module",
   "bin": {
@@ -51,7 +51,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-ssm": "^3.1127.0",
-    "commander": "^15.0.0",
+    "commander": "^13.1.0",
     "express": "^5.2.1",
     "jiti": "^2.7.0",
     "picocolors": "^1.1.1",
