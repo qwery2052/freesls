@@ -30,7 +30,7 @@ export function printBanner(
       : pc.bold(pc.bgMagenta(pc.white(" SLS ")));
 
   const bannerArt = `
-   ${pc.magenta("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.2.0")}  ${frameworkBadge}
+   ${pc.magenta("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.2.1")}  ${frameworkBadge}
   ${pc.magenta("( o.o )")}  ${pc.dim("Offline API Gateway & Lambda Runner")}
    ${pc.magenta("> ^ <")}   ${pc.green("●")} Service: ${pc.bold(serviceName)} ${pc.dim(`[stage: ${stage}]`)}
   `;
@@ -50,26 +50,23 @@ function maskSensitiveValue(valueToMask: string): string {
   return `${valueToMask.slice(0, 4)}...${valueToMask.slice(-4)}`;
 }
 
-// Imprime el resumen de variables de entorno resueltas
 export function printEnvironmentSummary(
   environmentVariables: Record<string, string>,
   showValues = false,
 ) {
   const environmentKeys = Object.keys(environmentVariables);
   console.log(
-    `\n ${pc.magenta("🐾")} ${pc.bold("Environment Variables Loaded:")} ${pc.dim(`(${environmentKeys.length} resueltas)`)}`,
+    `\n ${pc.magenta("🐾")} ${pc.bold("Environment Variables Loaded:")} ${pc.dim(`(${environmentKeys.length} resolved)`)}`,
   );
 
   if (!showValues) {
-    console.log(
-      pc.dim("   (Usa el flag --show-env para ver los valores completos sin enmascarar)\n"),
-    );
+    console.log(pc.dim("   (Use --show-env to display full, unmasked values)\n"));
   } else {
-    console.log(pc.yellow("   ⚠️  Mostrando valores en texto plano (--show-env activo)\n"));
+    console.log(pc.yellow("   ⚠️  Displaying plaintext values (--show-env enabled)\n"));
   }
 
   if (environmentKeys.length === 0) {
-    console.log(pc.dim("   No se definieron variables de entorno globales."));
+    console.log(pc.dim("   No global environment variables defined."));
     return;
   }
 
@@ -78,7 +75,7 @@ export function printEnvironmentSummary(
     const isMockedValue = rawValue.startsWith("mock-");
 
     let displayValue = rawValue;
-    if (!showValues && !isMockedValue) {
+    if (!showValues) {
       displayValue = maskSensitiveValue(displayValue);
     }
 
@@ -94,10 +91,10 @@ export function printEnvironmentSummary(
 
 export function printRoutes(routes: RouteDefinition[], port: number) {
   console.log(pc.dim("─".repeat(60)));
-  console.log(`\n ${pc.bold("⚡ Endpoints Registrados:")}\n`);
+  console.log(`\n ${pc.bold("⚡ Registered Endpoints:")}\n`);
 
   if (routes.length === 0) {
-    console.log(pc.yellow("  ⚠️  No se encontraron eventos HTTP/HTTP-API en este servicio.\n"));
+    console.log(pc.yellow("  ⚠️  No HTTP/HTTP API events found in this service.\n"));
     return;
   }
 
@@ -112,5 +109,5 @@ export function printRoutes(routes: RouteDefinition[], port: number) {
   }
 
   console.log(pc.dim("─".repeat(60)));
-  console.log(pc.italic(pc.dim("  Listo para recibir peticiones... (Ctrl+C para salir)\n")));
+  console.log(pc.italic(pc.dim("  Ready for requests... (Ctrl+C to exit)\n")));
 }

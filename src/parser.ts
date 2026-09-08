@@ -1,10 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
-import { parse } from "yaml";
+import { parse, type ScalarTag, type CollectionTag } from "yaml";
 import pc from "picocolors";
 import type { ServerlessConfig, RouteDefinition, LoadResult } from "./types.js";
 import { SSMResolver } from "./ssm.js";
-import { extractSSMPaths, resolveVariables, type ResolveContext } from "./resolver.js";
+import {
+  extractSSMPaths,
+  getNestedValue,
+  resolveVariables,
+  resolveScalarData,
+  type ResolveContext,
+} from "./resolver.js";
 
 const cloudFormationTags = [
   "!Ref",
@@ -16,11 +22,14 @@ const cloudFormationTags = [
   "!ImportValue",
 ];
 
-const customTags = cloudFormationTags.map(tagName => ({
-  tag: tagName,
-  resolve: (resolvedValue: unknown) =>
-    typeof resolvedValue === "string" ? resolvedValue : JSON.stringify(resolvedValue),
-}));
+const customTags: (ScalarTag | CollectionTag)[] = cloudFormationTags.flatMap(tag => {
+  const key = tag === "!Ref" ? "Ref" : `Fn::${tag.slice(1)}`;
+  const tags: (ScalarTag | CollectionTag)[] = [{ tag, resolve: value => ({ [key]: value }) }];
+  if (["!Sub", "!GetAtt", "!Join", "!Select", "!Split"].includes(tag)) {
+    tags.push({ tag, collection: "seq", resolve: value => ({ [key]: value.toJSON() }) });
+  }
+  return tags;
+});
 
 export const parseYaml = <ParsedResult = any>(yamlContent: string): ParsedResult =>
   parse(yamlContent, { customTags });
@@ -33,24 +42,29 @@ export interface ParserOptions {
 }
 
 /**
- * Resuelve un diccionario de variables de entorno usando el contexto.
+ * Resolve environment scalars using the current context.
  */
 export function resolveEnvironmentVariables(
   environmentVariables: Record<string, unknown> | undefined,
-  context: ResolveContext,
+  context?: ResolveContext,
   baseEnvironment: Record<string, string> = {},
 ): Record<string, string> {
   const resolvedEnvironment: Record<string, string> = { ...baseEnvironment };
   if (!environmentVariables) return resolvedEnvironment;
 
   for (const [variableKey, variableValue] of Object.entries(environmentVariables)) {
-    resolvedEnvironment[variableKey] = resolveVariables(String(variableValue), context, true);
+    if (variableValue !== null && typeof variableValue === "object") {
+      throw new Error(`Unsupported intrinsic or object in environment variable ${variableKey}`);
+    }
+    resolvedEnvironment[variableKey] = context
+      ? resolveVariables(String(variableValue), context, true)
+      : String(variableValue);
   }
   return resolvedEnvironment;
 }
 
 /**
- * Carga valores de mock desde el archivo ssm.env ubicado en la raíz del proyecto.
+ * Load local SSM mocks from the project root.
  */
 function loadSSMEnvFile(workingDirectory: string): Map<string, string> {
   const ssmEnvFilePath = path.resolve(workingDirectory, "ssm.env");
@@ -87,7 +101,7 @@ function loadSSMEnvFile(workingDirectory: string): Map<string, string> {
 }
 
 /**
- * Resuelve valores SSM consultando AWS o cargando mocks locales desde ssm.env.
+ * Fetch SSM values or load offline mocks.
  */
 export async function resolveSSMValues(
   parameterPaths: string[],
@@ -102,19 +116,19 @@ export async function resolveSSMValues(
 
   const ssmMocksFromEnv = loadSSMEnvFile(workingDirectory);
   if (ssmMocksFromEnv.size > 0) {
-    console.log(pc.dim(`🐾 SSM offline: cargados mocks desde ssm.env`));
+    console.log(pc.dim("SSM offline: loaded mocks from ssm.env"));
   } else {
-    console.log(pc.dim(`🐾 SSM offline: operando con fallbacks y mocks locales`));
+    console.log(pc.dim("SSM offline: using fallbacks and local mocks"));
   }
 
   return ssmMocksFromEnv;
 }
 
 /**
- * Normaliza la definición de un evento HTTP/HTTP API.
+ * Normalize an HTTP event definition.
  */
 function parseHttpEvent(httpEventConfig: unknown): { method: string; path: string } | null {
-  if (!httpEventConfig) return null;
+  if (httpEventConfig == null) return null;
 
   let httpMethod = "ANY";
   let routePath = "/";
@@ -123,10 +137,17 @@ function parseHttpEvent(httpEventConfig: unknown): { method: string; path: strin
     const stringParts = httpEventConfig.trim().split(/\s+/);
     httpMethod = stringParts[0] || "ANY";
     routePath = stringParts[1] || "/";
-  } else if (typeof httpEventConfig === "object" && httpEventConfig !== null) {
+  } else if (typeof httpEventConfig === "object" && !Array.isArray(httpEventConfig)) {
     const objectConfig = httpEventConfig as { method?: string; path?: string };
+    for (const field of ["method", "path"] as const) {
+      if (objectConfig[field] !== undefined && typeof objectConfig[field] !== "string") {
+        throw new Error(`Invalid HTTP event ${field}; expected a string`);
+      }
+    }
     httpMethod = objectConfig.method || "ANY";
     routePath = objectConfig.path || "/";
+  } else {
+    throw new Error("Invalid HTTP event; expected a string or object");
   }
 
   return {
@@ -136,12 +157,12 @@ function parseHttpEvent(httpEventConfig: unknown): { method: string; path: strin
 }
 
 /**
- * Extrae las definiciones de rutas a partir de la configuración de funciones.
+ * Extract HTTP routes from function definitions.
  */
 function extractRoutes(
   functionsConfig: Record<string, any> = {},
   globalEnvironment: Record<string, string>,
-  context: ResolveContext,
+  httpApiPayload: unknown = "2.0",
 ): RouteDefinition[] {
   const routeDefinitions: RouteDefinition[] = [];
 
@@ -150,13 +171,27 @@ function extractRoutes(
 
     const functionEnvironment = resolveEnvironmentVariables(
       functionConfig.environment,
-      context,
+      undefined,
       globalEnvironment,
     );
 
     for (const eventConfig of functionConfig.events) {
       const parsedHttp = parseHttpEvent(eventConfig?.http ?? eventConfig?.httpApi);
       if (!parsedHttp) continue;
+      if (typeof functionConfig.handler !== "string" || !functionConfig.handler.trim()) {
+        throw new Error(
+          `Invalid handler for function ${functionName}; expected a non-empty string`,
+        );
+      }
+      const payloadVersion =
+        eventConfig.http != null
+          ? "1.0"
+          : httpApiPayload === 1 || httpApiPayload === 2
+            ? `${httpApiPayload}.0`
+            : String(httpApiPayload);
+      if (payloadVersion !== "1.0" && payloadVersion !== "2.0") {
+        throw new Error("Unsupported HTTP API payload version; expected 1.0 or 2.0");
+      }
 
       routeDefinitions.push({
         functionName,
@@ -164,6 +199,7 @@ function extractRoutes(
         path: parsedHttp.path,
         handler: functionConfig.handler,
         environment: functionEnvironment,
+        payloadVersion,
       });
     }
   }
@@ -177,7 +213,7 @@ export async function loadServerlessConfig(
 ): Promise<LoadResult> {
   const serverlessYamlPath = path.resolve(workingDirectory, "serverless.yml");
   if (!fs.existsSync(serverlessYamlPath)) {
-    throw new Error(`No se encontró serverless.yml en ${workingDirectory}`);
+    throw new Error(`No serverless.yml found in ${workingDirectory}`);
   }
 
   const rawYamlContent = fs.readFileSync(serverlessYamlPath, "utf-8");
@@ -196,11 +232,16 @@ export async function loadServerlessConfig(
     rawConfig: initialConfig,
   };
 
-  // PASADA 1: Resuelve las variables internas (${self:...}, ${opt:...})
-  const resolvedYamlPass1 = resolveVariables(rawYamlContent, context, false);
+  // Discover SSM references in resolved scalar data, never in rewritten YAML.
+  const resolvedConfigPass1 = resolveScalarData(initialConfig, text =>
+    resolveVariables(text, context, false),
+  );
 
-  // PASADA 2: Extraer rutas SSM y resolverlas (AWS o mocks)
-  const ssmParameterPaths = extractSSMPaths(resolvedYamlPass1);
+  const ssmParameterPaths: string[] = [];
+  resolveScalarData(resolvedConfigPass1, text => {
+    ssmParameterPaths.push(...extractSSMPaths(text));
+    return text;
+  });
   context.ssmValues = await resolveSSMValues(
     ssmParameterPaths,
     options.region,
@@ -208,15 +249,19 @@ export async function loadServerlessConfig(
     workingDirectory,
   );
 
-  // PASADA 3: Inyectar valores de SSM y resolver fallbacks
-  const finalConfig = parseYaml<ServerlessConfig>(resolvedYamlPass1);
+  const finalConfig = resolveScalarData(initialConfig, text =>
+    resolveVariables(text, context, true),
+  ) as ServerlessConfig;
 
-  // Resuelve variables de entorno del provider y las exporta a process.env
-  const globalEnvironment = resolveEnvironmentVariables(finalConfig.provider?.environment, context);
+  // Export provider environment variables.
+  const globalEnvironment = resolveEnvironmentVariables(finalConfig.provider?.environment);
   Object.assign(process.env, globalEnvironment);
 
-  // Extrae y resuelve las rutas definidas en functions
-  const routeDefinitions = extractRoutes(finalConfig.functions, globalEnvironment, context);
+  const routeDefinitions = extractRoutes(
+    finalConfig.functions,
+    globalEnvironment,
+    getNestedValue(finalConfig, "provider.httpApi.payload"),
+  );
 
   return {
     config: finalConfig,

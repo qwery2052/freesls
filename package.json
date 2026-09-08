@@ -1,6 +1,6 @@
 {
   "name": "freesls",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Offline API Gateway & AWS Lambda runner for Serverless Framework & AWS SAM with TypeScript and SSM support",
   "type": "module",
   "bin": {
@@ -11,6 +11,7 @@
   ],
   "scripts": {
     "build": "tsc",
+    "test": "npm run build && node --test",
     "watch": "tsc --watch",
     "debug": "npm run build && node dist/cli.js -s dev -p 4000 --profile myth-dev --show-env",
     "format": "prettier --write .",

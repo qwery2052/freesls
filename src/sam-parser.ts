@@ -1,9 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import pc from "picocolors";
 import type { ServerlessConfig, RouteDefinition, LoadResult } from "./types.js";
 import { parseYaml, resolveSSMValues, type ParserOptions } from "./parser.js";
-import { extractSSMPaths } from "./resolver.js";
+import { extractSSMPaths, resolveScalarData } from "./resolver.js";
 
 export interface SamParameterDefinition {
   Type?: string;
@@ -17,6 +16,7 @@ export interface SamEventDefinition {
     Path?: string;
     Method?: string;
     RestApiId?: string;
+    PayloadFormatVersion?: string | number;
   };
 }
 
@@ -54,7 +54,7 @@ export interface SamTemplate {
 }
 
 /**
- * Encuentra la ruta del template de SAM (template.yaml o template.yml).
+ * Find the SAM template path.
  */
 export function findSamTemplatePath(workingDirectory: string): string {
   const candidateFiles = ["template.yaml", "template.yml", "Template.yaml", "Template.yml"];
@@ -65,12 +65,12 @@ export function findSamTemplatePath(workingDirectory: string): string {
     }
   }
   throw new Error(
-    `No se encontró template.yaml ni template.yml en ${workingDirectory}. Verifica que sea un proyecto AWS SAM.`,
+    `No template.yaml or template.yml found in ${workingDirectory}. Check that this is an AWS SAM project.`,
   );
 }
 
 /**
- * Extrae los parámetros de SAM combinando los defaults del template y los parámetros de CLI.
+ * Merge template defaults and CLI parameters.
  */
 export function buildSamParameters(
   templateParameters: Record<string, SamParameterDefinition> = {},
@@ -79,20 +79,20 @@ export function buildSamParameters(
 ): Record<string, string> {
   const resolvedParameters: Record<string, string> = {};
 
-  // 1. Cargar defaults del template
+  // Load template defaults.
   for (const [parameterKey, parameterDefinition] of Object.entries(templateParameters)) {
     if (parameterDefinition.Default !== undefined) {
       resolvedParameters[parameterKey] = String(parameterDefinition.Default);
     }
   }
 
-  // 2. El stage pasado por CLI tiene prioridad sobre el default del template
+  // CLI stage overrides template defaults.
   if (stage) {
     resolvedParameters.Stage = stage;
     resolvedParameters.stage = stage;
   }
 
-  // 3. Sobrescribir con los parámetros del CLI (--param key=value)
+  // Explicit CLI parameters take precedence.
   for (const [cliKey, cliValue] of Object.entries(cliParams)) {
     resolvedParameters[cliKey] = cliValue;
   }
@@ -108,8 +108,10 @@ export interface SamResolutionOptions {
   ssmValues?: Map<string, string>;
 }
 
+type SamResolutionContext = SamResolutionOptions & { propertyStack?: unknown[] };
+
 /**
- * Resuelve el valor de un parámetro SSM desde el mapa consultado o genera un mock declarativo.
+ * Resolve an SSM value or generate an offline mock.
  */
 function resolveSsmParameterValue(ssmPath: string, ssmValues?: Map<string, string>): string {
   const normalizedSsmKey = ssmPath.trim();
@@ -127,31 +129,37 @@ function resolveSsmParameterValue(ssmPath: string, ssmValues?: Map<string, strin
 }
 
 /**
- * Resuelve una propiedad de texto de un recurso, quitando comillas y resolviendo variables internas.
+ * Resolve explicit references in resource names.
  */
 function resolveTemplatePropertyString(
   propertyValue: unknown,
   fallbackValue: string,
-  options: SamResolutionOptions,
+  options: SamResolutionContext,
 ): string {
-  if (typeof propertyValue === "string") {
-    const cleanPropertyValue = propertyValue.replace(/^['"]|['"]$/g, "");
-    return resolveSamVariables(cleanPropertyValue, options.parameters, options, false);
+  if (propertyValue == null) return fallbackValue;
+  const stack = options.propertyStack ?? [];
+  if (stack.includes(propertyValue) || stack.length >= 100) {
+    throw new Error("Cyclic or excessively nested CloudFormation resource name reference");
   }
-  return fallbackValue;
+  const resolved = resolveSamData(
+    propertyValue,
+    { ...options, propertyStack: [...stack, propertyValue] },
+    false,
+  );
+  if (typeof resolved === "object") throw new Error("Unsupported intrinsic in resource name");
+  return String(resolved);
 }
 
 /**
- * Resuelve una referencia CloudFormation (!Ref o { Ref }) hacia pseudo-parámetros,
- * parámetros de usuario, variables de entorno o recursos.
+ * Resolve a CloudFormation reference to a parameter or local resource mock.
  */
 function resolveCloudFormationRef(
   referenceName: string,
-  options: SamResolutionOptions,
+  options: SamResolutionContext,
 ): string | null {
   const trimmedRef = referenceName.trim();
 
-  // 1. CloudFormation Pseudo Parameters
+  // CloudFormation pseudo parameters.
   if (trimmedRef === "AWS::Region") return options.region;
   if (trimmedRef === "AWS::AccountId") return "123456789012";
   if (trimmedRef === "AWS::StackName") return options.serviceName;
@@ -159,17 +167,17 @@ function resolveCloudFormationRef(
   if (trimmedRef === "AWS::URLSuffix") return "amazonaws.com";
   if (trimmedRef === "AWS::NoValue") return "";
 
-  // 2. Parámetros del template o del CLI
+  // Template and CLI parameters.
   if (options.parameters[trimmedRef] !== undefined) {
     return options.parameters[trimmedRef];
   }
 
-  // 3. Variables de entorno del sistema
+  // System environment variables.
   if (process.env[trimmedRef] !== undefined) {
     return process.env[trimmedRef]!;
   }
 
-  // 4. Recursos del template
+  // Local resource mocks.
   const targetResource = options.resources?.[trimmedRef];
   if (targetResource) {
     const resourceType = targetResource.Type || "";
@@ -214,7 +222,7 @@ function resolveCloudFormationRef(
         return `mock-${trimmedRef.toLowerCase()}`;
       }
       default: {
-        if (typeof resourceProperties.Name === "string") {
+        if (resourceProperties.Name != null) {
           return resolveTemplatePropertyString(resourceProperties.Name, trimmedRef, options);
         }
         return trimmedRef;
@@ -226,12 +234,12 @@ function resolveCloudFormationRef(
 }
 
 /**
- * Resuelve un atributo de un recurso CloudFormation (!GetAtt o { "Fn::GetAtt" }).
+ * Resolve a CloudFormation resource attribute locally.
  */
 function resolveCloudFormationGetAtt(
   resourceName: string,
   attributeName: string,
-  options: SamResolutionOptions,
+  options: SamResolutionContext,
 ): string | null {
   const targetResource = options.resources?.[resourceName];
   if (!targetResource) {
@@ -288,22 +296,15 @@ function resolveCloudFormationGetAtt(
 }
 
 /**
- * Resuelve variables de estilo CloudFormation/SAM, SSM y funciones intrínsecas en strings:
- * ${AWS::Region}, ${AWS::AccountId}, ${Stage}, ${param}, ${ssm:/path},
- * {{resolve:ssm:...}}, !Ref, !GetAtt
+ * Resolve SAM substitutions and SSM references in scalar text.
  */
 export function resolveSamVariables(
   text: string,
   parameters: Record<string, string>,
-  options: {
-    region: string;
-    serviceName: string;
-    ssmValues?: Map<string, string>;
-    resources?: Record<string, SamResource>;
-  },
+  options: Omit<SamResolutionContext, "parameters">,
   resolveSSM = true,
 ): string {
-  const resolutionOptions: SamResolutionOptions = {
+  const resolutionOptions: SamResolutionContext = {
     ...options,
     parameters,
   };
@@ -312,48 +313,10 @@ export function resolveSamVariables(
   let iterationCount = 0;
   const maxIterations = 10;
 
-  // 1. Resolver Dynamic References de CloudFormation: {{resolve:ssm:...}} y {{resolve:ssm-secure:...}}
-  const dynamicSsmRegex = /\{\{\s*resolve:ssm(?:-secure)?:\s*([^}:]+)(?::[^}]+)?\s*\}\}/g;
-  if (resolveSSM) {
-    currentResult = currentResult.replace(dynamicSsmRegex, (_fullMatch, parameterPath) => {
-      return resolveSsmParameterValue(parameterPath, options.ssmValues);
-    });
-  }
+  // Preserve dynamic reference version selectors.
+  const dynamicSsmRegex = /\{\{\s*resolve:ssm(?:-secure)?:\s*([^{}]+)\}\}/g;
 
-  // 2. Resolver funciones intrínsecas en sintaxis YAML (!Ref y !GetAtt)
-  currentResult = currentResult.replace(
-    /!Ref\s+['"]?([a-zA-Z0-9_:]+)['"]?/g,
-    (fullMatch, refIdentifier) => {
-      const resolvedRef = resolveCloudFormationRef(refIdentifier, resolutionOptions);
-      return resolvedRef !== null ? `'${resolvedRef.replace(/'/g, "''")}'` : fullMatch;
-    },
-  );
-
-  currentResult = currentResult.replace(
-    /!GetAtt\s+['"]?([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)['"]?/g,
-    (fullMatch, resourceName, attributeName) => {
-      const resolvedGetAtt = resolveCloudFormationGetAtt(
-        resourceName,
-        attributeName,
-        resolutionOptions,
-      );
-      return resolvedGetAtt !== null ? `'${resolvedGetAtt.replace(/'/g, "''")}'` : fullMatch;
-    },
-  );
-
-  currentResult = currentResult.replace(
-    /!GetAtt\s*\[\s*['"]?([a-zA-Z0-9_]+)['"]?\s*,\s*['"]?([a-zA-Z0-9_]+)['"]?\s*\]/g,
-    (fullMatch, resourceName, attributeName) => {
-      const resolvedGetAtt = resolveCloudFormationGetAtt(
-        resourceName,
-        attributeName,
-        resolutionOptions,
-      );
-      return resolvedGetAtt !== null ? `'${resolvedGetAtt.replace(/'/g, "''")}'` : fullMatch;
-    },
-  );
-
-  // 3. Resolver variables anidadas ${...}
+  // Resolve nested substitutions.
   const innermostRegex = resolveSSM ? /\$\{([^{}]+)\}/g : /\$\{\s*(?!ssm:)([^{}]+)\}/g;
 
   let previousResult = "";
@@ -362,14 +325,14 @@ export function resolveSamVariables(
     currentResult = currentResult.replace(innermostRegex, (fullMatch, expression) => {
       const trimmedExpression = expression.trim();
 
-      // SSM estilo Serverless Framework: ${ssm:...}
+      // Serverless-style SSM references.
       if (trimmedExpression.startsWith("ssm:")) {
         if (!resolveSSM) return fullMatch;
         const ssmPath = trimmedExpression.slice(4).split("~")[0].trim();
         return resolveSsmParameterValue(ssmPath, options.ssmValues);
       }
 
-      // Referencia a atributo de recurso estilo CloudFormation Sub: ${Resource.Attribute}
+      // Resource attributes in substitutions.
       if (trimmedExpression.includes(".")) {
         const dotIndex = trimmedExpression.indexOf(".");
         const targetResourceName = trimmedExpression.slice(0, dotIndex).trim();
@@ -387,7 +350,7 @@ export function resolveSamVariables(
         }
       }
 
-      // Parámetros de SAM, pseudo-parámetros, variables de entorno o recursos directos
+      // Parameters and resource references.
       const resolvedRef = resolveCloudFormationRef(trimmedExpression, resolutionOptions);
       if (resolvedRef !== null) {
         return resolvedRef;
@@ -398,7 +361,7 @@ export function resolveSamVariables(
     iterationCount++;
   }
 
-  // 4. Re-intentar resolver Dynamic References si se interpolaron variables previas (ej. ${Stage})
+  // Resolve dynamic paths after substitution.
   if (resolveSSM) {
     currentResult = currentResult.replace(dynamicSsmRegex, (_fullMatch, parameterPath) => {
       return resolveSsmParameterValue(parameterPath, options.ssmValues);
@@ -408,27 +371,79 @@ export function resolveSamVariables(
   return currentResult;
 }
 
-/**
- * Resuelve un diccionario de variables de entorno para SAM.
- */
+/** Resolve supported intrinsics without flattening unsupported objects. */
+function resolveSamData(
+  value: unknown,
+  options: SamResolutionContext,
+  resolveSSM: boolean,
+): unknown {
+  if (typeof value === "string") {
+    return resolveSamVariables(value, options.parameters, options, resolveSSM);
+  }
+  if (Array.isArray(value)) return value.map(item => resolveSamData(item, options, resolveSSM));
+  if (!value || typeof value !== "object") return value;
+  const object = value as Record<string, unknown>;
+  if (Object.keys(object).length === 1) {
+    if (typeof object.Ref === "string") {
+      return resolveCloudFormationRef(object.Ref, options) ?? value;
+    }
+    const getAtt = object["Fn::GetAtt"];
+    const parts = typeof getAtt === "string" ? getAtt.split(/\.(.*)/s).slice(0, 2) : getAtt;
+    if (
+      Array.isArray(parts) &&
+      parts.length === 2 &&
+      parts.every(part => typeof part === "string")
+    ) {
+      return resolveCloudFormationGetAtt(parts[0], parts[1], options) ?? value;
+    }
+    const sub = object["Fn::Sub"];
+    const template =
+      typeof sub === "string" ? sub : Array.isArray(sub) && sub.length === 2 ? sub[0] : undefined;
+    const variables = Array.isArray(sub) ? sub[1] : {};
+    if (
+      typeof template === "string" &&
+      variables &&
+      typeof variables === "object" &&
+      !Array.isArray(variables)
+    ) {
+      const substitutions = Object.fromEntries(
+        Object.entries(variables).map(([key, item]) => [
+          key,
+          resolveSamData(item, options, resolveSSM),
+        ]),
+      );
+      if (Object.values(substitutions).some(item => item !== null && typeof item === "object"))
+        return value;
+      let unresolved = false;
+      const result = template.replace(/\$\{([^{}]+)\}/g, (match, name: string) => {
+        if (name.startsWith("!")) return `\${${name.slice(1)}}`;
+        if (Object.hasOwn(substitutions, name)) return String(substitutions[name]);
+        const resolved = resolveSamVariables(match, options.parameters, options, resolveSSM);
+        if (resolved === match && !name.startsWith("ssm:")) unresolved = true;
+        return resolved;
+      });
+      if (unresolved) return value;
+      // Resolve only dynamic SSM references here; do not re-expand escaped substitutions.
+      return resolveSSM
+        ? result.replace(/\{\{\s*resolve:ssm(?:-secure)?:\s*([^{}]+)\}\}/g, (_match, name) =>
+            resolveSsmParameterValue(name, options.ssmValues),
+          )
+        : result;
+    }
+  }
+  if (Object.keys(object).some(key => key === "Ref" || key.startsWith("Fn::"))) return value;
+  return Object.fromEntries(
+    Object.entries(object).map(([key, item]) => [key, resolveSamData(item, options, resolveSSM)]),
+  );
+}
+
+/** Convert resolved environment scalars and reject unsupported objects safely. */
 function resolveSamEnvironmentMap(
   environmentMap: Record<string, unknown> | undefined,
-  parameters: Record<string, string>,
-  options: {
-    region: string;
-    serviceName: string;
-    ssmValues?: Map<string, string>;
-    resources?: Record<string, SamResource>;
-  },
   baseEnvironment: Record<string, string> = {},
 ): Record<string, string> {
   const resolvedEnvironment: Record<string, string> = { ...baseEnvironment };
   if (!environmentMap) return resolvedEnvironment;
-
-  const resolutionOptions: SamResolutionOptions = {
-    ...options,
-    parameters,
-  };
 
   for (const [variableKey, rawValue] of Object.entries(environmentMap)) {
     if (rawValue === undefined || rawValue === null) {
@@ -436,63 +451,20 @@ function resolveSamEnvironmentMap(
       continue;
     }
 
-    // 1. Manejo de objetos intrínsecos de CloudFormation (ej: { Ref: "Stage" })
-    if (typeof rawValue === "object") {
-      const objectValue = rawValue as Record<string, any>;
-      if (typeof objectValue.Ref === "string") {
-        const resolvedRef = resolveCloudFormationRef(objectValue.Ref, resolutionOptions);
-        resolvedEnvironment[variableKey] = resolvedRef ?? objectValue.Ref;
-        continue;
-      }
-      if (objectValue["Fn::GetAtt"]) {
-        const getAttTarget = objectValue["Fn::GetAtt"];
-        if (Array.isArray(getAttTarget) && getAttTarget.length === 2) {
-          const resolvedGetAtt = resolveCloudFormationGetAtt(
-            String(getAttTarget[0]),
-            String(getAttTarget[1]),
-            resolutionOptions,
-          );
-          resolvedEnvironment[variableKey] =
-            resolvedGetAtt ?? `${getAttTarget[0]}.${getAttTarget[1]}`;
-          continue;
-        }
-        if (typeof getAttTarget === "string" && getAttTarget.includes(".")) {
-          const [resourceName, attributeName] = getAttTarget.split(".");
-          const resolvedGetAtt = resolveCloudFormationGetAtt(
-            resourceName,
-            attributeName,
-            resolutionOptions,
-          );
-          resolvedEnvironment[variableKey] = resolvedGetAtt ?? getAttTarget;
-          continue;
-        }
-      }
+    const resolved = rawValue;
+    if (resolved !== null && typeof resolved === "object") {
+      throw new Error(
+        `Unsupported or unresolved intrinsic/object in environment variable ${variableKey}`,
+      );
     }
-
-    // 2. Manejo de strings
-    const stringValue = String(rawValue);
-
-    // Fallback declarativo: si la cadena coincide exactamente con un parámetro o recurso
-    if (parameters[stringValue] !== undefined) {
-      resolvedEnvironment[variableKey] = parameters[stringValue];
-      continue;
-    }
-    if (options.resources?.[stringValue]) {
-      const resolvedResourceRef = resolveCloudFormationRef(stringValue, resolutionOptions);
-      if (resolvedResourceRef !== null) {
-        resolvedEnvironment[variableKey] = resolvedResourceRef;
-        continue;
-      }
-    }
-
-    resolvedEnvironment[variableKey] = resolveSamVariables(stringValue, parameters, options, true);
+    resolvedEnvironment[variableKey] = String(resolved ?? "");
   }
 
   return resolvedEnvironment;
 }
 
 /**
- * Normaliza y extrae las rutas de una función SAM.
+ * Normalize HTTP routes for a SAM function.
  */
 function extractSamFunctionRoutes(
   functionName: string,
@@ -503,13 +475,22 @@ function extractSamFunctionRoutes(
   const rawEvents = functionProperties.Events;
   if (!rawEvents) return routes;
 
+  for (const field of ["Handler", "CodeUri"] as const) {
+    if (functionProperties[field] !== undefined && typeof functionProperties[field] !== "string") {
+      throw new Error(`Invalid ${field} for function ${functionName}; expected a string`);
+    }
+  }
+  if (functionProperties.Handler !== undefined && !functionProperties.Handler.trim()) {
+    throw new Error(`Invalid Handler for function ${functionName}; expected a non-empty string`);
+  }
+
   const rawHandler = functionProperties.Handler || "index.handler";
   const codeUri = functionProperties.CodeUri?.trim();
 
-  // Construir handler completo según CodeUri si aplica
+  // Include the function's code directory.
   let fullHandler = rawHandler;
   if (codeUri && codeUri !== "." && codeUri !== "./") {
-    // Normalizar separadores a barra inclinada
+    // Normalize path separators.
     const normalizedUri = codeUri.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "");
     fullHandler = `${normalizedUri}/${rawHandler}`;
   }
@@ -523,9 +504,26 @@ function extractSamFunctionRoutes(
     if (eventType !== "Api" && eventType !== "HttpApi") continue;
 
     const properties = event.Properties || {};
+    for (const field of ["Method", "Path"] as const) {
+      if (properties[field] !== undefined && typeof properties[field] !== "string") {
+        throw new Error(
+          `Invalid SAM event ${field} for function ${functionName}; expected a string`,
+        );
+      }
+    }
     const rawPath = properties.Path || "/";
     const method = (properties.Method || "ANY").toUpperCase();
     const formattedPath = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
+    const payload = properties.PayloadFormatVersion ?? "2.0";
+    const payloadVersion =
+      eventType === "Api"
+        ? "1.0"
+        : payload === 1 || payload === 2
+          ? `${payload}.0`
+          : String(payload);
+    if (payloadVersion !== "1.0" && payloadVersion !== "2.0") {
+      throw new Error("Unsupported HTTP API payload version; expected 1.0 or 2.0");
+    }
 
     routes.push({
       functionName,
@@ -533,6 +531,7 @@ function extractSamFunctionRoutes(
       path: formattedPath,
       handler: fullHandler,
       environment: resolvedEnvironment,
+      payloadVersion,
     });
   }
 
@@ -540,7 +539,7 @@ function extractSamFunctionRoutes(
 }
 
 /**
- * Carga e interpreta un template de AWS SAM (template.yaml o template.yml).
+ * Load an AWS SAM template.
  */
 export async function loadSamConfig(
   workingDirectory = process.cwd(),
@@ -564,11 +563,13 @@ export async function loadSamConfig(
     resources: templateResources,
   };
 
-  // PASADA 1: Resuelve parámetros y referencias internas
-  const resolvedYamlPass1 = resolveSamVariables(rawYamlContent, parameters, samOptions, false);
-
-  // PASADA 2: Extraer rutas SSM y resolverlas
-  const ssmParameterPaths = extractSSMPaths(resolvedYamlPass1);
+  // Discover SSM paths from parsed data, including explicit substitutions.
+  const resolvedConfigPass1 = resolveSamData(initialConfig, { ...samOptions, parameters }, false);
+  const ssmParameterPaths: string[] = [];
+  resolveScalarData(resolvedConfigPass1, text => {
+    ssmParameterPaths.push(...extractSSMPaths(text));
+    return text;
+  });
   const ssmValues = await resolveSSMValues(
     ssmParameterPaths,
     options.region,
@@ -581,21 +582,18 @@ export async function loadSamConfig(
     ssmValues,
   };
 
-  // PASADA 3: Inyectar valores finales
-  const resolvedYamlPass3 = resolveSamVariables(
-    resolvedYamlPass1,
-    parameters,
-    fullSamOptions,
+  const finalConfig = resolveSamData(
+    initialConfig,
+    { ...fullSamOptions, parameters },
     true,
-  );
-  const finalConfig = parseYaml<SamTemplate>(resolvedYamlPass3);
+  ) as SamTemplate;
 
-  // Extraer variables globales de Globals.Function.Environment.Variables
+  // Export global function environment variables.
   const globalSamEnv = finalConfig.Globals?.Function?.Environment?.Variables;
-  const globalEnvironment = resolveSamEnvironmentMap(globalSamEnv, parameters, fullSamOptions);
+  const globalEnvironment = resolveSamEnvironmentMap(globalSamEnv);
   Object.assign(process.env, globalEnvironment);
 
-  // Extraer funciones y rutas de Resources
+  // Extract function routes.
   const routeDefinitions: RouteDefinition[] = [];
   const resources = finalConfig.Resources || {};
 
@@ -608,8 +606,6 @@ export async function loadSamConfig(
     const properties = resourceConfig.Properties || {};
     const functionEnv = resolveSamEnvironmentMap(
       properties.Environment?.Variables,
-      parameters,
-      fullSamOptions,
       globalEnvironment,
     );
 

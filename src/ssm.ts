@@ -8,7 +8,7 @@ export class SSMResolver {
   private client: SSMClient;
   private cache = new Map<string, string>();
 
-  constructor(region = "us-east-1") {
+  constructor(private readonly region = "us-east-1") {
     this.client = new SSMClient({ region });
   }
 
@@ -20,10 +20,9 @@ export class SSMResolver {
     if (uniquePaths.length === 0) return this.cache;
 
     const awsProfile = process.env.AWS_PROFILE || "default";
-    const awsRegion = process.env.AWS_REGION || "us-east-1";
 
     const resolutionSpinner = new Spinner(
-      `Resolviendo ${uniquePaths.length} parámetros en AWS SSM [Profile: ${pc.bold(awsProfile)} | Region: ${pc.bold(awsRegion)}]...`,
+      `Resolving ${uniquePaths.length} AWS SSM parameters [Configured profile: ${pc.bold(awsProfile)} | Region: ${pc.bold(this.region)}]...`,
     );
     resolutionSpinner.start();
 
@@ -37,59 +36,46 @@ export class SSMResolver {
         );
 
         response.Parameters?.forEach(parameter => {
-          if (parameter.Name && parameter.Value) {
-            this.cache.set(parameter.Name, parameter.Value);
+          if (parameter.Name && parameter.Value !== undefined) {
+            this.cache.set(`${parameter.Name}${parameter.Selector ?? ""}`, parameter.Value);
           }
         });
 
-        // Si AWS nos dice que alguno de los parámetros no existe en la cuenta
         if (response.InvalidParameters && response.InvalidParameters.length > 0) {
           failedParameters.push(...response.InvalidParameters);
         }
-      } catch (connectionError: any) {
-        resolutionSpinner.stop(false, pc.red("Falla al conectar con AWS SSM"));
-        console.error(pc.red(`\n[SSM Connection Error] ${connectionError.message}`));
-        if (
-          connectionError.name === "CredentialsProviderError" ||
-          connectionError.message?.includes("SSO")
-        ) {
-          console.error(
-            pc.yellow(
-              `\n💡 Tip: Tu sesión de AWS SSO puede haber expirado. Ejecuta:\n   aws sso login --profile ${awsProfile}\n`,
-            ),
-          );
-        }
-        process.exit(1);
+      } catch (connectionError) {
+        resolutionSpinner.stop(false, pc.red("AWS SSM request failed"));
+        const error =
+          connectionError instanceof Error ? connectionError : new Error(String(connectionError));
+        const loginHint =
+          error.name === "CredentialsProviderError" || error.message.includes("SSO")
+            ? ` Check your credentials or run: aws sso login --profile ${awsProfile}`
+            : "";
+        throw new Error(`Unable to resolve AWS SSM parameters: ${error.message}.${loginHint}`, {
+          cause: error,
+        });
       }
     }
 
     if (failedParameters.length > 0) {
-      resolutionSpinner.stop(false, pc.red(`Falla al obtener parámetros de SSM`));
-      console.error(
-        pc.bold(pc.red("\nLos siguientes parámetros no existen en AWS Parameter Store:")),
+      resolutionSpinner.stop(false, pc.red("SSM parameters not found"));
+      throw new Error(
+        `SSM parameters not found: ${failedParameters.join(", ")}. Check the configured names and stage.`,
       );
-      failedParameters.forEach(parameterName =>
-        console.error(`  ${pc.red("✖")} ${pc.yellow(parameterName)}`),
-      );
-      console.error(
-        pc.dim("\nVerifica que los nombres de ruta en el YAML o el stage sean los correctos.\n"),
-      );
-      process.exit(1);
     }
 
     resolutionSpinner.stop(
       true,
-      pc.green(
-        `Todos los parámetros de SSM se resolvieron con éxito (${uniquePaths.length}/${uniquePaths.length})`,
-      ),
+      pc.green(`SSM parameters resolved (${uniquePaths.length}/${uniquePaths.length})`),
     );
     return this.cache;
   }
 
   get(parameterPath: string): string {
     const cachedValue = this.cache.get(parameterPath);
-    if (!cachedValue) {
-      throw new Error(`Parámetro no encontrado en caché de SSM: ${parameterPath}`);
+    if (cachedValue === undefined) {
+      throw new Error(`SSM parameter not found in cache: ${parameterPath}`);
     }
     return cachedValue;
   }

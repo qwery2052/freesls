@@ -8,7 +8,7 @@ import { createJiti } from "jiti";
 import type {
   RouteDefinition,
   APIGatewayProxyEvent,
-  APIGatewayProxyResult,
+  APIGatewayProxyEventV2,
   LambdaContext,
   ServerOptions,
 } from "./types.js";
@@ -16,21 +16,19 @@ import { formatMethod } from "./printer.js";
 
 const DEFAULT_TIMEOUT_MILLISECONDS = 30000;
 const SUPPORTED_EXTENSIONS = [".ts", ".js", ".mjs", ".cjs", ".tsx", ".jsx"];
+let invocationQueue: Promise<unknown> = Promise.resolve();
 
 /**
- * Convierte rutas de sintaxis Serverless a sintaxis compatible con Express 5.
- * Ej: /users/{id} -> /users/:id
- * Ej: /files/{proxy+} -> /files/*proxy
+ * Quote parameter names for Express 5, including names with hyphens or digits.
  */
 export function serverlessPathToExpressPath(serverlessPath: string): string {
   return serverlessPath
-    .replace(/\{([a-zA-Z0-9_-]+)\+\}/g, "*$1")
-    .replace(/\{([a-zA-Z0-9_-]+)\}/g, ":$1");
+    .replace(/\{([a-zA-Z0-9_-]+)\+\}/g, '*"$1"')
+    .replace(/\{([a-zA-Z0-9_-]+)\}/g, ':"$1"');
 }
 
 /**
- * Resuelve la ruta física del archivo que contiene el handler en el proyecto.
- * Soporta TypeScript (.ts, .tsx) y JavaScript (.js, .mjs, .cjs).
+ * Resolve TypeScript or JavaScript handler files relative to the project.
  */
 export function resolveHandlerPath(
   workingDirectory: string,
@@ -38,9 +36,7 @@ export function resolveHandlerPath(
 ): { filePath: string; functionName: string } {
   const lastDotIndex = handlerExpression.lastIndexOf(".");
   if (lastDotIndex === -1) {
-    throw new Error(
-      `Handler inválido: "${handlerExpression}". Debe tener formato "archivo.función"`,
-    );
+    throw new Error(`Invalid handler: "${handlerExpression}". Expected "file.function"`);
   }
 
   const relativeFilePath = handlerExpression.substring(0, lastDotIndex);
@@ -65,13 +61,11 @@ export function resolveHandlerPath(
     }
   }
 
-  throw new Error(
-    `No se encontró el archivo del handler para "${handlerExpression}" en "${workingDirectory}" (se buscaron extensiones .ts, .js, .mjs, .cjs)`,
-  );
+  throw new Error(`Handler file not found for "${handlerExpression}" in "${workingDirectory}"`);
 }
 
 /**
- * Normaliza y extrae los parámetros de ruta de la petición.
+ * Normalize Express wildcard arrays into API Gateway path parameters.
  */
 function extractPathParameters(
   rawParams: Record<string, string | string[] | undefined>,
@@ -90,23 +84,18 @@ function extractPathParameters(
 }
 
 /**
- * Normaliza y extrae los parámetros de query string de la petición.
+ * Preserve repeated query values without Express query-parser coercion.
  */
-function extractQueryParameters(rawQuery: Request["query"]): {
+function extractQueryParameters(rawQuery: string): {
   queryStringParameters: Record<string, string> | null;
   multiValueQueryStringParameters: Record<string, string[]> | null;
 } {
-  const queryStringParameters: Record<string, string> = {};
-  const multiValueQueryStringParameters: Record<string, string[]> = {};
+  const queryStringParameters: Record<string, string> = Object.create(null);
+  const multiValueQueryStringParameters: Record<string, string[]> = Object.create(null);
 
-  for (const [queryKey, queryValue] of Object.entries(rawQuery)) {
-    if (Array.isArray(queryValue)) {
-      multiValueQueryStringParameters[queryKey] = queryValue.map(String);
-      queryStringParameters[queryKey] = String(queryValue[queryValue.length - 1]);
-    } else if (queryValue !== undefined && queryValue !== null) {
-      queryStringParameters[queryKey] = String(queryValue);
-      multiValueQueryStringParameters[queryKey] = [String(queryValue)];
-    }
+  for (const [queryKey, queryValue] of new URLSearchParams(rawQuery)) {
+    (multiValueQueryStringParameters[queryKey] ??= []).push(queryValue);
+    queryStringParameters[queryKey] = queryValue;
   }
 
   return {
@@ -120,72 +109,132 @@ function extractQueryParameters(rawQuery: Request["query"]): {
 }
 
 /**
- * Normaliza y extrae las cabeceras HTTP de la petición.
+ * Use raw headers because Node combines or discards some duplicate headers.
  */
-function extractHeaders(rawHeaders: Request["headers"]): {
+function extractHeaders(rawHeaders: string[]): {
   headers: Record<string, string>;
   multiValueHeaders: Record<string, string[]>;
 } {
-  const headers: Record<string, string> = {};
-  const multiValueHeaders: Record<string, string[]> = {};
+  const headers: Record<string, string> = Object.create(null);
+  const multiValueHeaders: Record<string, string[]> = Object.create(null);
 
-  for (const [headerKey, headerValue] of Object.entries(rawHeaders)) {
-    if (Array.isArray(headerValue)) {
-      multiValueHeaders[headerKey] = headerValue;
-      headers[headerKey] = headerValue.join(",");
-    } else if (headerValue !== undefined) {
-      headers[headerKey] = String(headerValue);
-      multiValueHeaders[headerKey] = [String(headerValue)];
-    }
+  for (let index = 0; index < rawHeaders.length; index += 2) {
+    const key = rawHeaders[index].toLowerCase();
+    (multiValueHeaders[key] ??= []).push(rawHeaders[index + 1]);
+    headers[key] = rawHeaders[index + 1];
   }
 
   return { headers, multiValueHeaders };
 }
 
 /**
- * Ejecuta una acción dentro de un entorno de variables temporal, restaurando el original al finalizar.
+ * Serialize across all apps: process.env is shared by the entire process.
  */
-async function withTemporaryEnvironment<ExecutionResult>(
+function withTemporaryEnvironment<ExecutionResult>(
   targetEnvironment: Record<string, string>,
   executionCallback: () => Promise<ExecutionResult>,
 ): Promise<ExecutionResult> {
-  const originalEnvironmentBackup: Record<string, string | undefined> = {};
+  const execution = invocationQueue.then(async () => {
+    const originalEnvironmentBackup = { ...process.env };
 
-  for (const [envKey, envValue] of Object.entries(targetEnvironment)) {
-    originalEnvironmentBackup[envKey] = process.env[envKey];
-    process.env[envKey] = envValue;
-  }
+    for (const [envKey, envValue] of Object.entries(targetEnvironment)) {
+      process.env[envKey] = envValue;
+    }
 
-  try {
-    return await executionCallback();
-  } finally {
-    for (const [envKey, originalValue] of Object.entries(originalEnvironmentBackup)) {
-      if (originalValue === undefined) {
-        delete process.env[envKey];
-      } else {
-        process.env[envKey] = originalValue;
+    try {
+      return await executionCallback();
+    } finally {
+      for (const envKey of Object.keys(process.env)) {
+        if (!(envKey in originalEnvironmentBackup)) delete process.env[envKey];
+      }
+      for (const [envKey, originalValue] of Object.entries(originalEnvironmentBackup)) {
+        if (originalValue === undefined) {
+          delete process.env[envKey];
+        } else {
+          process.env[envKey] = originalValue;
+        }
       }
     }
-  }
+  });
+  invocationQueue = execution.catch(() => {});
+  return execution;
 }
 
 /**
- * Construye el payload de evento compatible con AWS APIGatewayProxyEvent.
+ * Build the core REST API (v1) or HTTP API (v2) payload.
  */
 function buildApiGatewayEvent(
   request: Request,
   routeDefinition: RouteDefinition,
   options: ServerOptions,
-): APIGatewayProxyEvent {
+): APIGatewayProxyEvent | APIGatewayProxyEventV2 {
   const pathParameters = extractPathParameters(request.params);
-  const { queryStringParameters, multiValueQueryStringParameters } = extractQueryParameters(
-    request.query,
-  );
-  const { headers, multiValueHeaders } = extractHeaders(request.headers);
+  const rawQueryString = request.originalUrl.split("?").slice(1).join("?");
+  const { queryStringParameters, multiValueQueryStringParameters } =
+    extractQueryParameters(rawQueryString);
+  const { headers, multiValueHeaders } = extractHeaders(request.rawHeaders);
 
   let bodyString: string | null = null;
+  const contentType = (request.get("content-type") || "").split(";")[0].trim().toLowerCase();
+  // Without binary-media configuration, infer text from the content type.
+  const isText =
+    contentType.startsWith("text/") ||
+    /(?:json|xml|javascript|x-www-form-urlencoded)$/.test(contentType);
+  let isBase64Encoded = false;
   if (request.body && Buffer.isBuffer(request.body) && request.body.length > 0) {
-    bodyString = request.body.toString("utf-8");
+    isBase64Encoded = !isText;
+    bodyString = request.body.toString(isBase64Encoded ? "base64" : "utf8");
+  }
+
+  if (routeDefinition.payloadVersion === "2.0") {
+    for (const [key, values] of Object.entries(multiValueHeaders)) headers[key] = values.join(",");
+    const cookies = multiValueHeaders.cookie?.flatMap(value =>
+      value
+        .split(";")
+        .map(cookie => cookie.trim())
+        .filter(Boolean),
+    );
+    delete headers.cookie;
+    const routeKey = `${routeDefinition.method.toUpperCase()} ${routeDefinition.path}`;
+    return {
+      version: "2.0",
+      routeKey,
+      rawPath: request.path,
+      rawQueryString,
+      headers,
+      ...(cookies?.length ? { cookies } : {}),
+      ...(pathParameters ? { pathParameters } : {}),
+      ...(multiValueQueryStringParameters
+        ? {
+            queryStringParameters: Object.fromEntries(
+              Object.entries(multiValueQueryStringParameters).map(([key, values]) => [
+                key,
+                values.join(","),
+              ]),
+            ),
+          }
+        : {}),
+      body: bodyString,
+      isBase64Encoded,
+      requestContext: {
+        accountId: "offlineContext_accountId",
+        apiId: "offlineContext_apiId",
+        domainName: request.hostname,
+        domainPrefix: "offline",
+        routeKey,
+        stage: options.stage || "dev",
+        requestId: crypto.randomUUID(),
+        time: new Date().toUTCString(),
+        timeEpoch: Date.now(),
+        http: {
+          method: request.method,
+          path: request.path,
+          protocol: `HTTP/${request.httpVersion}`,
+          sourceIp: request.ip || "127.0.0.1",
+          userAgent: request.get("user-agent") || "",
+        },
+      },
+    };
   }
 
   return {
@@ -193,7 +242,7 @@ function buildApiGatewayEvent(
     headers,
     multiValueHeaders,
     httpMethod: request.method.toUpperCase(),
-    isBase64Encoded: false,
+    isBase64Encoded,
     path: request.path,
     pathParameters,
     queryStringParameters,
@@ -208,7 +257,7 @@ function buildApiGatewayEvent(
         userAgent: request.get("user-agent") || "",
       },
       path: request.path,
-      protocol: request.protocol.toUpperCase(),
+      protocol: `HTTP/${request.httpVersion}`,
       requestId: `offline_${crypto.randomUUID()}`,
       requestTimeEpoch: Date.now(),
       resourceId: "offlineContext_resourceId",
@@ -220,12 +269,13 @@ function buildApiGatewayEvent(
 }
 
 /**
- * Construye el contexto simulado de AWS Lambda.
+ * The remaining time is advisory only; in-process execution cannot be cancelled.
  */
 function buildLambdaContext(
   routeDefinition: RouteDefinition,
   options: ServerOptions,
   startTime: number,
+  complete: LambdaContext["done"],
 ): LambdaContext {
   return {
     functionName: routeDefinition.functionName,
@@ -237,51 +287,74 @@ function buildLambdaContext(
     logStreamName: `[$LATEST]${crypto.randomBytes(16).toString("hex")}`,
     getRemainingTimeInMillis: () =>
       Math.max(0, DEFAULT_TIMEOUT_MILLISECONDS - (Date.now() - startTime)),
-    done: () => {},
-    fail: () => {},
-    succeed: () => {},
+    callbackWaitsForEmptyEventLoop: false,
+    done: complete,
+    fail: error => complete(normalizeError(error)),
+    succeed: result => complete(null, result),
   };
 }
 
-/**
- * Ejecuta una función handler soportando promesas y callbacks tradicionales.
- */
-async function invokeLambdaHandler(
-  handlerFunction: any,
-  event: APIGatewayProxyEvent,
-  context: LambdaContext,
-): Promise<APIGatewayProxyResult | any> {
-  if (handlerFunction.length >= 3) {
-    return new Promise((resolve, reject) => {
-      let callbackInvoked = false;
-      const callbackHandler = (callbackError: any, callbackResult: any) => {
-        if (callbackInvoked) return;
-        callbackInvoked = true;
-        if (callbackError) reject(callbackError);
-        else resolve(callbackResult);
-      };
-
-      try {
-        const potentialPromise = handlerFunction(event, context, callbackHandler);
-        if (potentialPromise && typeof potentialPromise.then === "function") {
-          potentialPromise.then(resolve).catch(reject);
-        }
-      } catch (invocationError) {
-        reject(invocationError);
-      }
-    });
+function normalizeError(error: unknown): Error {
+  if (error instanceof Error) return error;
+  let message: string;
+  try {
+    message = typeof error === "string" ? error : (JSON.stringify(error) ?? String(error));
+  } catch {
+    message = "Unknown handler error";
   }
+  return new Error(message);
+}
 
-  return handlerFunction(event, context);
+type LambdaHandler = (
+  event: APIGatewayProxyEvent | APIGatewayProxyEventV2,
+  context: LambdaContext,
+  callback: LambdaContext["done"],
+) => unknown;
+
+// First completion wins. A bare undefined return waits for callback/context completion.
+// Detached work and event-loop draining are not tracked; never release the queue on a timer.
+function invokeLambdaHandler(
+  handlerFunction: LambdaHandler,
+  event: APIGatewayProxyEvent | APIGatewayProxyEventV2,
+  route: RouteDefinition,
+  options: ServerOptions,
+): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const complete: LambdaContext["done"] = (error, result) => {
+      if (error !== undefined && error !== null) reject(normalizeError(error));
+      else resolve(result);
+    };
+    const context = buildLambdaContext(route, options, Date.now(), complete);
+    try {
+      const result = handlerFunction(event, context, complete);
+      if (result !== undefined)
+        Promise.resolve(result).then(resolve, error => reject(normalizeError(error)));
+    } catch (error) {
+      reject(normalizeError(error));
+    }
+  });
 }
 
 /**
- * Envía la respuesta HTTP basada en el resultado de la función Lambda.
+ * Serialize proxy responses, retaining v1 multi-value precedence and v2 cookies.
  */
-function sendLambdaResponse(response: Response, lambdaResult: APIGatewayProxyResult | any): void {
-  const statusCode = typeof lambdaResult?.statusCode === "number" ? lambdaResult.statusCode : 200;
+function sendLambdaResponse(
+  response: Response,
+  result: unknown,
+  payloadVersion: RouteDefinition["payloadVersion"],
+): void {
+  const lambdaResult =
+    result !== null && typeof result === "object" ? (result as Record<string, unknown>) : {};
+  if (payloadVersion === "2.0" && lambdaResult.statusCode === undefined) {
+    response
+      .status(200)
+      .type("application/json")
+      .send(JSON.stringify(result) ?? "");
+    return;
+  }
+  const statusCode = typeof lambdaResult.statusCode === "number" ? lambdaResult.statusCode : 200;
 
-  if (lambdaResult?.headers) {
+  if (lambdaResult.headers && typeof lambdaResult.headers === "object") {
     for (const [headerKey, headerValue] of Object.entries(lambdaResult.headers)) {
       if (headerValue !== undefined && headerValue !== null) {
         response.setHeader(headerKey, String(headerValue));
@@ -289,12 +362,20 @@ function sendLambdaResponse(response: Response, lambdaResult: APIGatewayProxyRes
     }
   }
 
-  if (lambdaResult?.multiValueHeaders) {
+  if (
+    payloadVersion !== "2.0" &&
+    lambdaResult.multiValueHeaders &&
+    typeof lambdaResult.multiValueHeaders === "object"
+  ) {
     for (const [headerKey, headerValues] of Object.entries(lambdaResult.multiValueHeaders)) {
       if (Array.isArray(headerValues)) {
         response.setHeader(headerKey, headerValues.map(String));
       }
     }
+  }
+
+  if (payloadVersion === "2.0" && Array.isArray(lambdaResult.cookies)) {
+    response.setHeader("Set-Cookie", lambdaResult.cookies.map(String));
   }
 
   response.status(statusCode);
@@ -305,15 +386,19 @@ function sendLambdaResponse(response: Response, lambdaResult: APIGatewayProxyRes
     response.send(lambdaResult.body);
   } else if (lambdaResult?.body !== undefined) {
     response.json(lambdaResult.body);
-  } else if (lambdaResult !== undefined && typeof lambdaResult === "object") {
-    response.json(lambdaResult);
+  } else if (
+    lambdaResult.statusCode === undefined &&
+    result !== undefined &&
+    typeof result === "object"
+  ) {
+    response.json(result);
   } else {
     response.end();
   }
 }
 
 /**
- * Crea la aplicación Express configurada con todas las rutas y middlewares.
+ * Create the local HTTP application.
  */
 export function createServerApp(
   routes: RouteDefinition[],
@@ -321,18 +406,20 @@ export function createServerApp(
 ): express.Express {
   const app = express();
 
-  // Middleware para capturar cualquier tipo de body en Buffer crudo
-  app.use(express.raw({ type: "*/*", limit: "10mb" }));
+  app.use(express.raw({ type: () => true, limit: "10mb" }));
 
-  // Instancia de jiti configurada con source maps para debugging y recarga en caliente
+  // Source maps preserve in-process debugging. Transformed modules reload, but
+  // Jiti's native ESM/CJS paths still cache modules and their import-time env.
+  // Functions sharing native files/dependencies must not rely on isolated snapshots.
   const jitiRuntime = createJiti(options.workingDir, {
     sourceMaps: true,
     tsconfigPaths: true,
     moduleCache: false,
     fsCache: false,
+    tryNative: false,
   });
 
-  // Middleware de CORS por defecto para desarrollo local
+  // Wildcard origins cannot be combined with credentialed CORS.
   app.use((request: Request, response: Response, nextFunction: NextFunction) => {
     response.header("Access-Control-Allow-Origin", "*");
     response.header(
@@ -340,7 +427,6 @@ export function createServerApp(
       "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Amz-Date, X-Api-Key, X-Amz-Security-Token",
     );
     response.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD");
-    response.header("Access-Control-Allow-Credentials", "true");
 
     if (request.method === "OPTIONS") {
       response.status(204).end();
@@ -349,7 +435,6 @@ export function createServerApp(
     nextFunction();
   });
 
-  // Registrar cada ruta definida en serverless.yml
   for (const route of routes) {
     const expressPath = serverlessPathToExpressPath(route.path);
     const normalizedMethod = route.method.toLowerCase();
@@ -360,36 +445,42 @@ export function createServerApp(
       try {
         const { filePath, functionName } = resolveHandlerPath(options.workingDir, route.handler);
 
-        const importedModule = (await jitiRuntime.import(filePath)) as any;
-        const targetHandler =
-          importedModule[functionName] ||
-          importedModule.default?.[functionName] ||
-          (functionName === "default" ? importedModule.default : undefined);
+        const lambdaResult = await withTemporaryEnvironment(route.environment, async () => {
+          const importedModule = await jitiRuntime.import<Record<string, unknown>>(filePath);
+          const defaultExport = importedModule.default;
+          const targetHandler =
+            importedModule[functionName] ||
+            (defaultExport && typeof defaultExport === "object"
+              ? (defaultExport as Record<string, unknown>)[functionName]
+              : undefined) ||
+            (functionName === "default" ? importedModule.default : undefined);
 
-        if (typeof targetHandler !== "function") {
-          throw new Error(
-            `La función "${functionName}" no fue exportada en el módulo "${filePath}". Exportaciones encontradas: ${Object.keys(importedModule).join(", ")}`,
+          if (typeof targetHandler !== "function") {
+            throw new Error(
+              `Function "${functionName}" was not exported by "${filePath}". Available exports: ${Object.keys(importedModule).join(", ")}`,
+            );
+          }
+
+          const apiGatewayEvent = buildApiGatewayEvent(request, route, options);
+          return invokeLambdaHandler(
+            targetHandler as LambdaHandler,
+            apiGatewayEvent,
+            route,
+            options,
           );
-        }
+        });
 
-        const apiGatewayEvent = buildApiGatewayEvent(request, route, options);
-        const lambdaContext = buildLambdaContext(route, options, startTime);
-
-        const lambdaResult = await withTemporaryEnvironment(route.environment, () =>
-          invokeLambdaHandler(targetHandler, apiGatewayEvent, lambdaContext),
-        );
-
-        sendLambdaResponse(response, lambdaResult);
+        sendLambdaResponse(response, lambdaResult, route.payloadVersion ?? "1.0");
 
         const executionDuration = Date.now() - startTime;
-        const statusCode =
-          typeof lambdaResult?.statusCode === "number" ? lambdaResult.statusCode : 200;
+        const statusCode = response.statusCode;
         const statusColor = statusCode >= 500 ? pc.red : statusCode >= 400 ? pc.yellow : pc.green;
 
         console.log(
           `  ${formatMethod(request.method)} ${pc.white(request.path)} ${statusColor(`${statusCode}`)} ${pc.dim(`(${executionDuration}ms)`)}`,
         );
-      } catch (executionError: any) {
+      } catch (error) {
+        const executionError = normalizeError(error);
         const executionDuration = Date.now() - startTime;
         console.error(
           `\n  ${pc.bgRed(pc.white(" LAMBDA ERROR "))} ${pc.bold(pc.white(route.functionName))} ${pc.dim(`(${executionDuration}ms)`)}`,
@@ -400,7 +491,7 @@ export function createServerApp(
 
         if (!response.headersSent) {
           response.status(500).json({
-            errorMessage: executionError.message || "Error interno ejecutando la función Lambda",
+            errorMessage: executionError.message,
             errorType: executionError.name || "Error",
             stackTrace: executionError.stack ? executionError.stack.split("\n") : [],
           });
@@ -410,20 +501,25 @@ export function createServerApp(
 
     if (normalizedMethod === "any") {
       app.all(expressPath, handlerMiddleware);
-    } else if (typeof (app as any)[normalizedMethod] === "function") {
-      (app as any)[normalizedMethod](expressPath, handlerMiddleware);
     } else {
-      app.all(expressPath, handlerMiddleware);
+      app.all(expressPath, (request, response, next) => {
+        if (
+          request.method.toLowerCase() === normalizedMethod ||
+          (normalizedMethod === "get" && request.method === "HEAD")
+        ) {
+          return handlerMiddleware(request, response);
+        }
+        next();
+      });
     }
   }
 
-  // 404 para rutas no registradas
   app.use((request: Request, response: Response) => {
     console.log(
       `  ${formatMethod(request.method)} ${pc.dim(request.path)} ${pc.yellow("404 Not Found")}`,
     );
     response.status(404).json({
-      message: `Ruta no encontrada en FreeSLS: ${request.method} ${request.path}`,
+      message: `Route not found in FreeSLS: ${request.method} ${request.path}`,
     });
   });
 
@@ -431,7 +527,7 @@ export function createServerApp(
 }
 
 /**
- * Inicia el servidor HTTP local en el puerto indicado.
+ * Start the local HTTP server on the requested port.
  */
 export async function startServer(
   routes: RouteDefinition[],
@@ -449,11 +545,9 @@ export async function startServer(
   return new Promise((resolve, reject) => {
     const serverInstance = http.createServer(app);
 
-    serverInstance.on("error", (serverError: any) => {
+    serverInstance.on("error", (serverError: NodeJS.ErrnoException) => {
       if (serverError.code === "EADDRINUSE") {
-        console.error(
-          pc.red(`\n[FreeSLS Error] El puerto ${pc.bold(port)} ya está en uso por otro proceso.\n`),
-        );
+        console.error(pc.red(`\n[FreeSLS Error] Port ${pc.bold(port)} is already in use.\n`));
       } else {
         console.error(pc.red(`\n[FreeSLS Server Error] ${serverError.message}\n`));
       }

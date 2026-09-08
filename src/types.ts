@@ -33,6 +33,7 @@ export interface RouteDefinition {
   path: string;
   handler: string;
   environment: Record<string, string>;
+  payloadVersion?: "1.0" | "2.0";
 }
 
 export interface LoadResult {
@@ -53,7 +54,7 @@ export interface APIGatewayProxyEvent {
   queryStringParameters: Record<string, string | undefined> | null;
   multiValueQueryStringParameters: Record<string, string[] | undefined> | null;
   stageVariables: Record<string, string> | null;
-  requestContext: Record<string, any>;
+  requestContext: Record<string, unknown>;
   resource?: string;
 }
 
@@ -63,6 +64,21 @@ export interface APIGatewayProxyResult {
   multiValueHeaders?: Record<string, Array<boolean | number | string>>;
   body?: string;
   isBase64Encoded?: boolean;
+  cookies?: string[];
+}
+
+export interface APIGatewayProxyEventV2 {
+  version: "2.0";
+  routeKey: string;
+  rawPath: string;
+  rawQueryString: string;
+  cookies?: string[];
+  headers: Record<string, string>;
+  queryStringParameters?: Record<string, string>;
+  pathParameters?: Record<string, string>;
+  requestContext: Record<string, unknown>;
+  body: string | null;
+  isBase64Encoded: boolean;
 }
 
 export interface LambdaContext {
@@ -74,9 +90,10 @@ export interface LambdaContext {
   logGroupName: string;
   logStreamName: string;
   getRemainingTimeInMillis: () => number;
-  done: (error?: Error | null, result?: any) => void;
-  fail: (error: Error | string) => void;
-  succeed: (messageOrObject: any) => void;
+  callbackWaitsForEmptyEventLoop: boolean;
+  done: (error?: unknown, result?: unknown) => void;
+  fail: (error: unknown) => void;
+  succeed: (messageOrObject: unknown) => void;
 }
 
 export interface ServerOptions {

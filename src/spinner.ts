@@ -11,7 +11,8 @@ export class Spinner {
   }
 
   start() {
-    process.stdout.write("\x1B[?25l"); // Ocultar cursor
+    if (this.timer || !process.stdout.isTTY) return;
+    process.stdout.write("\x1B[?25l"); // Hide the cursor during animation.
     this.timer = setInterval(() => {
       const currentSymbol = pc.cyan(this.animationFrames[this.currentFrameIndex]);
       process.stdout.write(`\r ${currentSymbol} ${this.statusText}`);
@@ -28,7 +29,7 @@ export class Spinner {
       clearInterval(this.timer);
       this.timer = null;
     }
-    process.stdout.write("\x1B[?25h"); // Restaurar cursor
+    if (process.stdout.isTTY) process.stdout.write("\x1B[?25h"); // Restore the cursor.
     const statusIcon = isSuccess ? pc.green("✔") : pc.red("✖");
     const completionMessage = finalText || this.statusText;
     process.stdout.write(`\r ${statusIcon} ${completionMessage}\n`);
