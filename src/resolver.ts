@@ -152,22 +152,35 @@ export function resolveVariables(text: string, context: ResolveContext, resolveS
 }
 
 /**
- * Extrae todas las rutas SSM del texto una vez que ya no tienen variables anidadas adentro.
+ * Extrae todas las rutas SSM del texto (tanto formato Serverless ${ssm:/path}
+ * como Dynamic References de CloudFormation/SAM {{resolve:ssm:/path}}).
  */
 export function extractSSMPaths(content: string): string[] {
-  // Captura la parte de la ruta en ${ssm:/mi/ruta, ...} o ${ssm:/mi/ruta}
-  const ssmRegex = /\$\{\s*ssm:([^,}]+)/g;
   const discoveredPaths: string[] = [];
-  let regexMatch: RegExpExecArray | null;
 
-  while ((regexMatch = ssmRegex.exec(content)) !== null) {
-    const candidatePath = regexMatch[1].trim();
+  const addValidSSMPath = (candidatePath: string) => {
     const cleanPath = candidatePath.split("~")[0].trim();
-
-    // Solo tomamos rutas válidas de SSM (/...) que no tengan restos sin resolver ($ o {)
-    if (cleanPath.startsWith("/") && !cleanPath.includes("$") && !cleanPath.includes("{")) {
+    const hasUnresolvedTokens = cleanPath.includes("$") || cleanPath.includes("{");
+    if (cleanPath.startsWith("/") && !hasUnresolvedTokens) {
       discoveredPaths.push(cleanPath);
     }
+  };
+
+  // 1. Sintaxis Serverless Framework: ${ssm:/mi/ruta, ...} o ${ssm:/mi/ruta}
+  const serverlessSsmRegex = /\$\{\s*ssm:([^,}]+)/g;
+  let regexMatch: RegExpExecArray | null;
+
+  while ((regexMatch = serverlessSsmRegex.exec(content)) !== null) {
+    addValidSSMPath(regexMatch[1]);
+  }
+
+  // 2. Sintaxis CloudFormation / SAM Dynamic References:
+  // {{resolve:ssm:/ruta}} o {{resolve:ssm-secure:/ruta}} (con o sin versión :1 al final)
+  const cloudFormationDynamicReferenceRegex =
+    /\{\{\s*resolve:ssm(?:-secure)?:\s*([^}:]+)(?::[^}]+)?\s*\}\}/g;
+
+  while ((regexMatch = cloudFormationDynamicReferenceRegex.exec(content)) !== null) {
+    addValidSSMPath(regexMatch[1]);
   }
 
   return Array.from(new Set(discoveredPaths));

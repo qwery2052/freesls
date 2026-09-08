@@ -36,7 +36,10 @@ program
   .option("--profile <profile>", "Perfil AWS CLI/SSO para credenciales")
   .option("--param <params...>", "Parámetros en formato clave=valor (ej. deploymentStage=develop)")
   .option("--sam", "Usa template de AWS SAM (template.yaml/template.yml)")
-  .option("--sls", "Usa template de Serverless Framework (serverless.yml/serverless.yaml) [por defecto]")
+  .option(
+    "--sls",
+    "Usa template de Serverless Framework (serverless.yml/serverless.yaml) [por defecto]",
+  )
   .option("--no-ssm", "Desactiva la resolución real de SSM y usa mocks")
   .option(
     "--show-env",

@@ -218,5 +218,10 @@ export async function loadServerlessConfig(
   // Extrae y resuelve las rutas definidas en functions
   const routeDefinitions = extractRoutes(finalConfig.functions, globalEnvironment, context);
 
-  return { config: finalConfig, routes: routeDefinitions, globalEnv: globalEnvironment, framework: "serverless" };
+  return {
+    config: finalConfig,
+    routes: routeDefinitions,
+    globalEnv: globalEnvironment,
+    framework: "serverless",
+  };
 }
