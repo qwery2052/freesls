@@ -107,17 +107,17 @@ O agregar un script a tu `package.json`:
 
 ### Opciones de CLI
 
-| Opción       | Alias   | Descripción                                                      | Valor por Defecto                |
-| ------------ | ------- | ---------------------------------------------------------------- | -------------------------------- |
-| `--sam`      | `-sam`  | Usa template de AWS SAM (`template.yaml` / `template.yml`)       | `false`                          |
-| `--sls`      | `-sls`  | Usa template de Serverless Framework (`serverless.yml`)          | `true` (por defecto)             |
-| `--stage`    | `-s`    | Stage de despliegue (`dev`, `staging`, `prod`)                   | `develop`                        |
-| `--region`   | `-r`    | Región de AWS para SSM y contexto Lambda                         | `us-east-1`                      |
-| `--port`     | `-p`    | Puerto HTTP para el servidor local                               | `4000`                           |
-| `--profile`  |         | Perfil de AWS CLI / AWS SSO                                      | Variables de entorno del sistema |
-| `--param`    |         | Parámetros clave=valor (se inyectan a `process.env`)             | `{}`                             |
-| `--no-ssm`   |         | Desactiva consultas a AWS SSM (usa `ssm.env`, fallbacks o mocks) | `false` (resuelve SSM real)      |
-| `--show-env` |         | Muestra los valores de variables sin enmascarar en consola       | `false` (enmascara secretos)     |
+| Opción       | Alias  | Descripción                                                      | Valor por Defecto                |
+| ------------ | ------ | ---------------------------------------------------------------- | -------------------------------- |
+| `--sam`      | `-sam` | Usa template de AWS SAM (`template.yaml` / `template.yml`)       | `false`                          |
+| `--sls`      | `-sls` | Usa template de Serverless Framework (`serverless.yml`)          | `true` (por defecto)             |
+| `--stage`    | `-s`   | Stage de despliegue (`dev`, `staging`, `prod`)                   | `develop`                        |
+| `--region`   | `-r`   | Región de AWS para SSM y contexto Lambda                         | `us-east-1`                      |
+| `--port`     | `-p`   | Puerto HTTP para el servidor local                               | `4000`                           |
+| `--profile`  |        | Perfil de AWS CLI / AWS SSO                                      | Variables de entorno del sistema |
+| `--param`    |        | Parámetros clave=valor (se inyectan a `process.env`)             | `{}`                             |
+| `--no-ssm`   |        | Desactiva consultas a AWS SSM (usa `ssm.env`, fallbacks o mocks) | `false` (resuelve SSM real)      |
+| `--show-env` |        | Muestra los valores de variables sin enmascarar en consola       | `false` (enmascara secretos)     |
 
 ### Ejemplos comunes
 
