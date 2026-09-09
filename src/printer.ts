@@ -23,6 +23,7 @@ export function printBanner(
   port: number,
   stage: string,
   framework: "serverless" | "sam" = "serverless",
+  basePath = "",
 ) {
   const frameworkBadge =
     framework === "sam"
@@ -30,15 +31,18 @@ export function printBanner(
       : pc.bold(pc.bgMagenta(pc.white(" SLS ")));
 
   const bannerArt = `
-   ${pc.magenta("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.2.4")}  ${frameworkBadge}
+   ${pc.magenta("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.3.1")}  ${frameworkBadge}
   ${pc.magenta("( o.o )")}  ${pc.dim("Offline API Gateway & Lambda Runner")}
    ${pc.magenta("> ^ <")}   ${pc.green("●")} Service: ${pc.bold(serviceName)} ${pc.dim(`[stage: ${stage}]`)}
   `;
 
   console.log(bannerArt);
   console.log(pc.dim("─".repeat(60)));
+  const cleanBase = basePath
+    ? (basePath.startsWith("/") ? basePath : `/${basePath}`).replace(/\/+$/, "")
+    : "";
   console.log(
-    ` ${pc.bold("Local Endpoint:")} ${pc.underline(pc.cyan(`http://localhost:${port}`))}`,
+    ` ${pc.bold("Local Endpoint:")} ${pc.underline(pc.cyan(`http://localhost:${port}${cleanBase}`))}`,
   );
   console.log(pc.dim("─".repeat(60)));
 }
@@ -89,7 +93,7 @@ export function printEnvironmentSummary(
   console.log();
 }
 
-export function printRoutes(routes: RouteDefinition[], port: number) {
+export function printRoutes(routes: RouteDefinition[], port: number, basePath = "") {
   console.log(pc.dim("─".repeat(60)));
   console.log(`\n ${pc.bold("⚡ Registered Endpoints:")}\n`);
 
@@ -98,9 +102,15 @@ export function printRoutes(routes: RouteDefinition[], port: number) {
     return;
   }
 
+  const cleanBase = basePath
+    ? (basePath.startsWith("/") ? basePath : `/${basePath}`).replace(/\/+$/, "")
+    : "";
+
   for (const route of routes) {
     const methodBadge = formatMethod(route.method);
-    const endpointUrl = pc.white(`http://localhost:${port}${pc.bold(route.path)}`);
+    const routePath = route.path.startsWith("/") ? route.path : `/${route.path}`;
+    const fullPath = `${cleanBase}${routePath === "/" && cleanBase ? "" : routePath}`;
+    const endpointUrl = pc.white(`http://localhost:${port}${pc.bold(fullPath)}`);
     const handlerDetail =
       pc.dim(`└─ handler: `) + pc.yellow(route.handler) + pc.dim(` (${route.functionName})`);
 

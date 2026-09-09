@@ -101,4 +101,5 @@ export interface ServerOptions {
   workingDir: string;
   stage?: string;
   region?: string;
+  basePath?: string;
 }

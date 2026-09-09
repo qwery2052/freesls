@@ -4,9 +4,9 @@ import http from "node:http";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { startServer } from "../dist/server.js";
+import { startServer, normalizeBasePath, combinePaths } from "../dist/server.js";
 
-async function fixture(t, files, definitions) {
+async function fixture(t, files, definitions, defaultServerOptions = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), "freesls-server-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   for (const [name, source] of Object.entries(files))
@@ -22,11 +22,12 @@ async function fixture(t, files, definitions) {
       ),
     );
   });
-  async function listen(routes = definitions) {
+  async function listen(routes = definitions, serverOptions = defaultServerOptions) {
     const server = await startServer(
       routes.map(route => ({ functionName: "test", method: "any", environment: {}, ...route })),
       0,
       directory,
+      serverOptions,
     );
     servers.push(server);
     return (url, options = {}) =>
@@ -57,8 +58,88 @@ async function fixture(t, files, definitions) {
         request.end(options.body);
       });
   }
-  return { request: await listen(), listen };
+  return { request: await listen(), listen, directory };
 }
+
+test("circular controllers and services share instances and reload between requests", async t => {
+  const service = value => `import { controller } from './app.module';
+    export class Service {
+      value = '${value}';
+      loaded = process.env.FREESLS_CIRCULAR_ENV;
+      same(instance) { return controller === instance; }
+    }`;
+  const { request, directory } = await fixture(
+    t,
+    {
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: {
+          baseUrl: ".",
+          target: "ES2020",
+          experimentalDecorators: true,
+          paths: { "@app/*": ["./*"] },
+        },
+      }),
+      "handler.ts": `import { controller } from 'app.module';
+      import { service } from '@app/app.module';
+      export async function run(event) {
+        return { body: JSON.stringify({ ...(await controller.run(event)), same: service.same(controller), loaded: service.loaded }) };
+      }`,
+      "app.module.ts": `import { Controller } from './controller';
+      import { Service } from './service';
+      export const controller = new Controller();
+      export const service = new Service();`,
+      "controller.ts": `import { service } from './app.module';
+      import { Body } from './body';
+      class Dto { message!: string; }
+      export class Controller {
+        @Body(Dto)
+        async run(event) { return { value: service.value, message: event.body.message }; }
+      }`,
+      "body.ts": `export const Body = dto => (_target, _key, descriptor) => {
+      const original = descriptor.value;
+      descriptor.value = function(event) {
+        event.body = Object.assign(new dto(), JSON.parse(event.body));
+        return original.call(this, event);
+      };
+      return descriptor;
+    };`,
+      "service.ts": service("first"),
+    },
+    ["first", "second"].map(value => ({
+      path: `/${value}`,
+      handler: "handler.run",
+      environment: { FREESLS_CIRCULAR_ENV: value },
+    })),
+  );
+  for (const value of ["first", "second"]) {
+    await writeFile(path.join(directory, "service.ts"), service(value));
+    const response = await request(`/${value}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: '{"message":"hello"}',
+    });
+    assert.equal(response.status, 200, response.body.toString());
+    assert.deepEqual(response.json(), { value, message: "hello", same: true, loaded: value });
+  }
+  await writeFile(
+    path.join(directory, "service.ts"),
+    "throw new Error('load failed'); export class Service {}",
+  );
+  assert.equal((await request("/first")).json().errorMessage, "load failed");
+  await writeFile(path.join(directory, "service.ts"), service("recovered"));
+  const recovered = await request("/first", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: '{"message":"hello"}',
+  });
+  assert.equal(recovered.status, 200, recovered.body.toString());
+  assert.deepEqual(recovered.json(), {
+    value: "recovered",
+    message: "hello",
+    same: true,
+    loaded: "first",
+  });
+});
 
 test(
   "serializes import/invocation/restoration globally, including failures",
@@ -436,5 +517,77 @@ test(
     assert.equal(htmlRes.status, 200);
     assert.equal(htmlRes.headers["content-type"], "text/html; charset=utf-8");
     assert.equal(htmlRes.body.toString(), "<h1>Hi</h1>");
+  },
+);
+
+test("normalizeBasePath and combinePaths format paths properly", () => {
+  assert.equal(normalizeBasePath(undefined), "");
+  assert.equal(normalizeBasePath(""), "");
+  assert.equal(normalizeBasePath("/"), "");
+  assert.equal(normalizeBasePath("///"), "");
+  assert.equal(normalizeBasePath("medical-history-app"), "/medical-history-app");
+  assert.equal(normalizeBasePath("/medical-history-app"), "/medical-history-app");
+  assert.equal(normalizeBasePath("/medical-history-app/"), "/medical-history-app");
+  assert.equal(normalizeBasePath("api/v1/"), "/api/v1");
+
+  assert.equal(combinePaths("", "/test"), "/test");
+  assert.equal(combinePaths("", "test"), "/test");
+  assert.equal(
+    combinePaths("medical-history-app", "/request-medical-history"),
+    "/medical-history-app/request-medical-history",
+  );
+  assert.equal(
+    combinePaths("/medical-history-app/", "request-medical-history"),
+    "/medical-history-app/request-medical-history",
+  );
+  assert.equal(combinePaths("/medical-history-app", "/"), "/medical-history-app");
+  assert.equal(combinePaths("/medical-history-app", ""), "/medical-history-app");
+});
+
+test(
+  "server routes requests with basePath prefix and exposes full path in event",
+  { concurrency: false },
+  async t => {
+    const { request } = await fixture(
+      t,
+      {
+        "handler.ts": `
+    export function echo(event: any) {
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          path: event.path,
+          rawPath: event.rawPath,
+          resource: event.resource,
+          params: event.pathParameters,
+        }),
+      };
+    }
+  `,
+      },
+      [
+        { path: "/request-medical-history", handler: "handler.echo" },
+        { path: "/users/{id}", handler: "handler.echo" },
+      ],
+      { basePath: "medical-history-app" },
+    );
+
+    // Matches with prefix
+    const prefixedRes = await request("/medical-history-app/request-medical-history");
+    assert.equal(prefixedRes.status, 200);
+    const prefixedData = prefixedRes.json();
+    assert.equal(prefixedData.path, "/medical-history-app/request-medical-history");
+    assert.equal(prefixedData.resource, "/request-medical-history");
+
+    // Path parameters under basePath
+    const paramRes = await request("/medical-history-app/users/user-456");
+    assert.equal(paramRes.status, 200);
+    const paramData = paramRes.json();
+    assert.equal(paramData.path, "/medical-history-app/users/user-456");
+    assert.deepEqual(paramData.params, { id: "user-456" });
+
+    // Requests without prefix return 404
+    const unprefixedRes = await request("/request-medical-history");
+    assert.equal(unprefixedRes.status, 404);
   },
 );

@@ -168,3 +168,53 @@ test("printSsmResolutionError formats missing parameters without crashing", () =
     });
   });
 });
+
+test("CLI accepts --base-path and prefixes endpoints in banner and routes", async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), "freesls-basepath-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeFile(
+    path.join(directory, "serverless.yml"),
+    `service: test-basepath
+functions:
+  example:
+    handler: handler.run
+    events:
+      - http: GET /request-medical-history
+`,
+  );
+  await writeFile(
+    path.join(directory, "handler.js"),
+    `export function run() { return { statusCode: 200 }; }`,
+  );
+  const output = await new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      [cliPath, "--no-ssm", "--base-path", "medical-history-app", "-p", "4599"],
+      {
+        cwd: directory,
+        env: { ...process.env, NO_COLOR: "1" },
+      },
+    );
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => {
+      child.kill();
+      reject(new Error("CLI startup timed out"));
+    }, 10000);
+    child.stdout.on("data", chunk => {
+      stdout += chunk;
+      if (stdout.includes("Ready for requests")) child.kill();
+    });
+    child.stderr.on("data", chunk => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", () => {
+      clearTimeout(timeout);
+      if (stdout.includes("Ready for requests")) resolve(stdout);
+      else reject(new Error(stderr || "CLI exited before startup"));
+    });
+  });
+  assert.match(output, /http:\/\/localhost:4599\/medical-history-app/);
+  assert.match(output, /http:\/\/localhost:4599\/medical-history-app\/request-medical-history/);
+});

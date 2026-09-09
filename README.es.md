@@ -114,12 +114,13 @@ O agregar un script a tu `package.json`:
 | `--sls`      | `-sls`     | Usa template de Serverless Framework (`serverless.yml`)                         | `true` (por defecto)             |
 | `--stage`    | `-s`       | Stage de despliegue (`dev`, `staging`, `prod`)                                  | `develop`                        |
 | `--region`   | `-r`       | Región de AWS para SSM y contexto Lambda                                        | `us-east-1`                      |
-| `--port`     | `-p`       | Puerto HTTP para el servidor local                                              | `4000`                           |
-| `--profile`  |            | Perfil de AWS CLI / AWS SSO                                                     | Variables de entorno del sistema |
-| `--param`    |            | Parámetros clave=valor (se inyectan a `process.env`)                            | `{}`                             |
-| `--no-ssm`   |            | Desactiva consultas a AWS SSM (usa `ssm.env`, fallbacks o mocks)                | `false` (resuelve SSM real)      |
-| `--show-env` |            | Muestra los valores de variables sin enmascarar en consola                      | `false` (enmascara secretos)     |
-| `--version`  | `-v`, `-V` | Muestra la versión actual instalada                                             |                                  |
+| `--port`      | `-p`             | Puerto HTTP para el servidor local                                              | `4000`                           |
+| `--base-path` | `-b`, `--prefix` | Prefijo de ruta base para todos los endpoints (ej. `/medical-history-app`)     | `""` (raíz `/`)                  |
+| `--profile`   |                  | Perfil de AWS CLI / AWS SSO                                                     | Variables de entorno del sistema |
+| `--param`     |                  | Parámetros clave=valor (se inyectan a `process.env`)                            | `{}`                             |
+| `--no-ssm`    |                  | Desactiva consultas a AWS SSM (usa `ssm.env`, fallbacks o mocks)                | `false` (resuelve SSM real)      |
+| `--show-env`  |                  | Muestra los valores de variables sin enmascarar en consola                      | `false` (enmascara secretos)     |
+| `--version`   | `-v`, `-V`       | Muestra la versión actual instalada                                             |                                  |
 
 > [!WARNING]
 > **El modo AWS SAM (`--sam`) es Experimental**
@@ -134,6 +135,9 @@ freesls -v
 
 # Ejecutar Serverless Framework en stage 'dev' en el puerto 4000 usando perfil AWS SSO
 freesls -s dev -p 4000 --profile mi-empresa-dev
+
+# Ejecutar con un prefijo de ruta base (ej. http://localhost:4000/medical-history-app/...)
+freesls -s dev -p 4000 --base-path /medical-history-app
 
 # Ejecutar proyecto AWS SAM en stage 'dev'
 freesls -sam -s dev -p 4000 --profile mi-empresa-dev

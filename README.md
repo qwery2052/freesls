@@ -117,12 +117,13 @@ Or add a script to your `package.json`:
 | `--sls`      | `-sls`     | Uses Serverless Framework template (`serverless.yml`)                         | `true` (default)                 |
 | `--stage`    | `-s`       | Target deployment stage (`dev`, `staging`, `prod`)                            | `develop`                        |
 | `--region`   | `-r`       | AWS region for SSM and Lambda context                                         | `us-east-1`                      |
-| `--port`     | `-p`       | HTTP port for the local server                                                | `4000`                           |
-| `--profile`  |            | AWS CLI / AWS SSO profile name                                                | System environment credentials   |
-| `--param`    |            | Custom key=value parameters (injected into `process.env`)                     | `{}`                             |
-| `--no-ssm`   |            | Disables AWS SSM queries (uses `ssm.env`, YAML fallbacks, or mocks)           | `false` (queries real AWS SSM)   |
-| `--show-env` |            | Displays full, unmasked environment variables in console                      | `false` (masks sensitive values) |
-| `--version`  | `-v`, `-V` | Displays the installed FreeSLS version                                        |                                  |
+| `--port`      | `-p`             | HTTP port for the local server                                                | `4000`                           |
+| `--base-path` | `-b`, `--prefix` | Base path prefix for all endpoints (e.g. `/medical-history-app`)               | `""` (root `/`)                  |
+| `--profile`   |                  | AWS CLI / AWS SSO profile name                                                | System environment credentials   |
+| `--param`     |                  | Custom key=value parameters (injected into `process.env`)                     | `{}`                             |
+| `--no-ssm`    |                  | Disables AWS SSM queries (uses `ssm.env`, YAML fallbacks, or mocks)           | `false` (queries real AWS SSM)   |
+| `--show-env`  |                  | Displays full, unmasked environment variables in console                      | `false` (masks sensitive values) |
+| `--version`   | `-v`, `-V`       | Displays the installed FreeSLS version                                        |                                  |
 
 > [!WARNING]
 > **AWS SAM Mode (`--sam`) is Experimental**
@@ -137,6 +138,9 @@ freesls -v
 
 # Run Serverless Framework in 'dev' stage on port 4000 using an AWS SSO profile
 freesls -s dev -p 4000 --profile my-org-dev
+
+# Run with a custom base path prefix (e.g. http://localhost:4000/medical-history-app/...)
+freesls -s dev -p 4000 --base-path /medical-history-app
 
 # Run AWS SAM project in 'dev' stage
 freesls -sam -s dev -p 4000 --profile my-org-dev
@@ -301,6 +305,7 @@ provider:
 ### Local Execution Limits
 
 - Invocations run serially in the same Node.js process so environment overrides do not overlap. Handler loading happens inside that environment scope, and source maps remain enabled for debugging.
+- Transformed modules share a filename-normalized cache within each invocation, including circular imports through aliases and relative paths on Windows. The cache is discarded between invocations so source edits and route environments are reloaded. Cycles that use an export before it is initialized can still fail; FreeSLS does not reproduce esbuild's bundling semantics or execute Serverless build plugins.
 - Native JavaScript modules and dependencies may retain their first import-time environment values through module caching. Functions sharing those modules do not have separate Lambda execution environments. Restart FreeSLS after changing configuration.
 - The context's 30-second remaining-time clock is advisory, not an enforced timeout. A handler that never completes blocks subsequent invocations. Detached background work is not isolated, and `callbackWaitsForEmptyEventLoop` does not enable event-loop draining.
 - Handlers may complete through a callback, context completion method, returned promise, or synchronous result. A bare synchronous `undefined` return waits for callback/context completion; the first completion wins.
