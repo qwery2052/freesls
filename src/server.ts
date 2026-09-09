@@ -13,6 +13,7 @@ import type {
   ServerOptions,
 } from "./types.js";
 import { formatMethod } from "./printer.js";
+import { createTypeScriptTransform } from "./typescript-transform.js";
 
 const DEFAULT_TIMEOUT_MILLISECONDS = 30000;
 const SUPPORTED_EXTENSIONS = [".ts", ".js", ".mjs", ".cjs", ".tsx", ".jsx"];
@@ -336,6 +337,25 @@ function invokeLambdaHandler(
 }
 
 /**
+ * Infer API Gateway default Content-Type when omitted by the handler.
+ */
+function inferContentType(body: string): string {
+  const trimmed = body.trim();
+  if (
+    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+    (trimmed.startsWith("[") && trimmed.endsWith("]"))
+  ) {
+    try {
+      JSON.parse(trimmed);
+      return "application/json";
+    } catch {
+      // Not valid JSON
+    }
+  }
+  return "text/plain";
+}
+
+/**
  * Serialize proxy responses, retaining v1 multi-value precedence and v2 cookies.
  */
 function sendLambdaResponse(
@@ -367,9 +387,9 @@ function sendLambdaResponse(
     lambdaResult.multiValueHeaders &&
     typeof lambdaResult.multiValueHeaders === "object"
   ) {
-    for (const [headerKey, headerValues] of Object.entries(lambdaResult.multiValueHeaders)) {
-      if (Array.isArray(headerValues)) {
-        response.setHeader(headerKey, headerValues.map(String));
+    for (const [headerKey, headerValue] of Object.entries(lambdaResult.multiValueHeaders)) {
+      if (Array.isArray(headerValue)) {
+        response.setHeader(headerKey, headerValue.map(String));
       }
     }
   }
@@ -383,6 +403,9 @@ function sendLambdaResponse(
   if (lambdaResult?.isBase64Encoded && typeof lambdaResult?.body === "string") {
     response.send(Buffer.from(lambdaResult.body, "base64"));
   } else if (typeof lambdaResult?.body === "string") {
+    if (!response.getHeader("content-type")) {
+      response.setHeader("Content-Type", inferContentType(lambdaResult.body));
+    }
     response.send(lambdaResult.body);
   } else if (lambdaResult?.body !== undefined) {
     response.json(lambdaResult.body);
@@ -418,6 +441,7 @@ export function createServerApp(
     fsCache: false,
     tryNative: false,
   });
+  jitiRuntime.options.transform = createTypeScriptTransform(jitiRuntime.options.transform!);
 
   // Wildcard origins cannot be combined with credentialed CORS.
   app.use((request: Request, response: Response, nextFunction: NextFunction) => {

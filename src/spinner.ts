@@ -32,6 +32,6 @@ export class Spinner {
     if (process.stdout.isTTY) process.stdout.write("\x1B[?25h"); // Restore the cursor.
     const statusIcon = isSuccess ? pc.green("✔") : pc.red("✖");
     const completionMessage = finalText || this.statusText;
-    process.stdout.write(`\r ${statusIcon} ${completionMessage}\n`);
+    process.stdout.write(`\r\x1B[2K ${statusIcon} ${completionMessage}\n`);
   }
 }

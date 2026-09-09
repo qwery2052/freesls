@@ -6,8 +6,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SSMClient } from "@aws-sdk/client-ssm";
-import { SSMResolver } from "../dist/ssm.js";
-import { printEnvironmentSummary } from "../dist/printer.js";
+import { SSMResolver, SSMParameterNotFoundError } from "../dist/ssm.js";
+import { printEnvironmentSummary, printSsmResolutionError } from "../dist/printer.js";
 
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 
@@ -21,6 +21,14 @@ test("CLI rejects invalid parameters and ports without printing parameter values
     assert.equal(result.status, 1);
     assert.match(result.stderr, /Invalid --(?:param|port)/);
     assert.doesNotMatch(result.stderr, /private-invalid-value/);
+  }
+});
+
+test("CLI outputs version with -v, -V, and --version", () => {
+  for (const flag of ["-v", "-V", "--version"]) {
+    const result = spawnSync(process.execPath, [cliPath, flag], { encoding: "utf8" });
+    assert.equal(result.status, 0);
+    assert.match(result.stdout.trim(), /^\d+\.\d+\.\d+$/);
   }
 });
 
@@ -134,4 +142,29 @@ test("SSM invalid parameters reject with actionable names", async t => {
     new SSMResolver().resolveAll(["missing"]),
     /SSM parameters not found: missing/,
   );
+});
+
+test("SSM invalid parameters reject with SSMParameterNotFoundError instance", async t => {
+  t.mock.method(SSMClient.prototype, "send", async () => ({
+    InvalidParameters: ["/app/secret:1521", "/app/push"],
+  }));
+  await assert.rejects(
+    new SSMResolver("us-west-2").resolveAll(["/app/secret:1521", "/app/push"]),
+    err => {
+      assert.equal(err instanceof SSMParameterNotFoundError, true);
+      assert.equal(err.name, "SSMParameterNotFoundError");
+      assert.deepEqual(err.missingParameters, ["/app/secret:1521", "/app/push"]);
+      assert.equal(err.region, "us-west-2");
+      return true;
+    },
+  );
+});
+
+test("printSsmResolutionError formats missing parameters without crashing", () => {
+  assert.doesNotThrow(() => {
+    printSsmResolutionError(["/app/secret:1521", "/app/normal"], {
+      profile: "test-profile",
+      region: "us-east-1",
+    });
+  });
 });

@@ -4,6 +4,19 @@ import { Spinner } from "./spinner.js";
 
 const DEFAULT_BATCH_SIZE = 10;
 
+export class SSMParameterNotFoundError extends Error {
+  constructor(
+    public readonly missingParameters: string[],
+    public readonly profile: string,
+    public readonly region: string,
+  ) {
+    super(
+      `SSM parameters not found: ${missingParameters.join(", ")}. Check the configured names and stage.`,
+    );
+    this.name = "SSMParameterNotFoundError";
+  }
+}
+
 export class SSMResolver {
   private client: SSMClient;
   private cache = new Map<string, string>();
@@ -60,9 +73,7 @@ export class SSMResolver {
 
     if (failedParameters.length > 0) {
       resolutionSpinner.stop(false, pc.red("SSM parameters not found"));
-      throw new Error(
-        `SSM parameters not found: ${failedParameters.join(", ")}. Check the configured names and stage.`,
-      );
+      throw new SSMParameterNotFoundError(failedParameters, awsProfile, this.region);
     }
 
     resolutionSpinner.stop(

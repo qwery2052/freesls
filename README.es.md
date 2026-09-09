@@ -29,6 +29,7 @@
 > **En Desarrollo Activo y Alcance Actual**
 >
 > - 🚧 **En Desarrollo Continuo:** FreeSLS se encuentra en desarrollo activo y constante evolución. Se están incorporando mejoras, correcciones y nuevas capacidades continuamente.
+> - 🧪 **Modo AWS SAM (Experimental):** El soporte para proyectos AWS SAM (`--sam`) es actualmente experimental y está en desarrollo activo. La emulación de características complejas de CloudFormation es parcial.
 > - ⚡ **Alcance Actual:** Por el momento, FreeSLS funciona exclusivamente con **funciones AWS Lambda invocadas mediante eventos HTTP y HTTP API (API Gateway)** tanto para **Serverless Framework** (`serverless.yml`) como para **AWS SAM** (`template.yaml` / `template.yml`). El soporte para otros desencadenadores (SQS, SNS, EventBridge, S3, etc.) está proyectado para futuras versiones. ¡El feedback y los aportes son bienvenidos!
 
 ---
@@ -107,21 +108,30 @@ O agregar un script a tu `package.json`:
 
 ### Opciones de CLI
 
-| Opción       | Alias  | Descripción                                                      | Valor por Defecto                |
-| ------------ | ------ | ---------------------------------------------------------------- | -------------------------------- |
-| `--sam`      | `-sam` | Usa template de AWS SAM (`template.yaml` / `template.yml`)       | `false`                          |
-| `--sls`      | `-sls` | Usa template de Serverless Framework (`serverless.yml`)          | `true` (por defecto)             |
-| `--stage`    | `-s`   | Stage de despliegue (`dev`, `staging`, `prod`)                   | `develop`                        |
-| `--region`   | `-r`   | Región de AWS para SSM y contexto Lambda                         | `us-east-1`                      |
-| `--port`     | `-p`   | Puerto HTTP para el servidor local                               | `4000`                           |
-| `--profile`  |        | Perfil de AWS CLI / AWS SSO                                      | Variables de entorno del sistema |
-| `--param`    |        | Parámetros clave=valor (se inyectan a `process.env`)             | `{}`                             |
-| `--no-ssm`   |        | Desactiva consultas a AWS SSM (usa `ssm.env`, fallbacks o mocks) | `false` (resuelve SSM real)      |
-| `--show-env` |        | Muestra los valores de variables sin enmascarar en consola       | `false` (enmascara secretos)     |
+| Opción       | Alias      | Descripción                                                                     | Valor por Defecto                |
+| ------------ | ---------- | ------------------------------------------------------------------------------- | -------------------------------- |
+| `--sam`      | `-sam`     | 🧪 **Experimental:** Usa template de AWS SAM (`template.yaml` / `template.yml`) | `false`                          |
+| `--sls`      | `-sls`     | Usa template de Serverless Framework (`serverless.yml`)                         | `true` (por defecto)             |
+| `--stage`    | `-s`       | Stage de despliegue (`dev`, `staging`, `prod`)                                  | `develop`                        |
+| `--region`   | `-r`       | Región de AWS para SSM y contexto Lambda                                        | `us-east-1`                      |
+| `--port`     | `-p`       | Puerto HTTP para el servidor local                                              | `4000`                           |
+| `--profile`  |            | Perfil de AWS CLI / AWS SSO                                                     | Variables de entorno del sistema |
+| `--param`    |            | Parámetros clave=valor (se inyectan a `process.env`)                            | `{}`                             |
+| `--no-ssm`   |            | Desactiva consultas a AWS SSM (usa `ssm.env`, fallbacks o mocks)                | `false` (resuelve SSM real)      |
+| `--show-env` |            | Muestra los valores de variables sin enmascarar en consola                      | `false` (enmascara secretos)     |
+| `--version`  | `-v`, `-V` | Muestra la versión actual instalada                                             |                                  |
+
+> [!WARNING]
+> **El modo AWS SAM (`--sam`) es Experimental**
+>
+> La emulación para proyectos AWS SAM se encuentra actualmente en fase **beta / experimental**. Se admiten funciones intrínsecas esenciales (`Ref`, `Fn::GetAtt`, `Fn::Sub`) y referencias dinámicas a SSM (`{{resolve:ssm:...}}`). Las características avanzadas de CloudFormation (como `Mappings`, stacks anidados o funciones intrínsecas no implementadas) son aún parciales.
 
 ### Ejemplos comunes
 
 ```bash
+# Consultar versión instalada
+freesls -v
+
 # Ejecutar Serverless Framework en stage 'dev' en el puerto 4000 usando perfil AWS SSO
 freesls -s dev -p 4000 --profile mi-empresa-dev
 
@@ -285,6 +295,17 @@ provider:
 
 ## 🛠️ Desarrollo del Proyecto
 
+### Límites de Ejecución Local
+
+- Las invocaciones se ejecutan secuencialmente en el mismo proceso de Node.js para que las variables de entorno no se solapen. La carga del handler ocurre dentro de ese ámbito y los mapas de fuentes (source maps) permanecen activos para depuración.
+- Los módulos nativos de JavaScript y sus dependencias pueden retener las variables de entorno de su primera importación debido a la caché de módulos. Las funciones que comparten dichos módulos no disponen de entornos de ejecución aislados e independientes. Reinicia FreeSLS tras modificar la configuración.
+- El reloj de 30 segundos de tiempo restante del contexto es informativo y no un límite forzado. Un handler que nunca termine bloqueará las siguientes invocaciones. El trabajo asíncrono en segundo plano no queda aislado y `callbackWaitsForEmptyEventLoop` no fuerza el vaciado del bucle de eventos.
+- Los handlers pueden finalizar mediante un callback, un método de finalización de contexto, una promesa devuelta o un resultado síncrono. Un retorno síncrono `undefined` espera a que el callback o contexto finalicen; la primera finalización en ocurrir determina la respuesta.
+- Las rutas REST usan payload v1. Las rutas HTTP API usan por defecto v2, con soporte para anulaciones mediante `provider.httpApi.payload` en Serverless o `PayloadFormatVersion` en eventos SAM. La entrada binaria se infiere del tipo de contenido (Content-Type) y no de la configuración de tipos binarios de API Gateway en AWS.
+- El CORS local utiliza orígenes comodín (`*`) sin credenciales. Las peticiones con credenciales desde el navegador no están soportadas por esta política predeterminada.
+- El soporte para CloudFormation es parcial. Los valores compatibles de `Ref`, `Fn::GetAtt` y `Fn::Sub` se resuelven en local; los objetos intrínsecos de entorno no soportados generan errores explícitos. Los identificadores de recursos pueden ser simulados (mocks) y no los identificadores desplegados en AWS.
+- `--no-ssm` desactiva las consultas de FreeSLS a SSM, no las llamadas a AWS que hagan tus propios handlers. Los valores de variables de entorno se enmascaran por defecto, incluidos aquellos que comiencen con `mock-`.
+
 Si deseas clonar y contribuir a **FreeSLS**:
 
 ```bash
@@ -296,6 +317,9 @@ npm install
 
 # Compilar código TypeScript
 npm run build
+
+# Compilar y ejecutar pruebas de regresión locales (no requiere credenciales de AWS)
+npm test
 
 # Modo observador (watch)
 npm run watch
