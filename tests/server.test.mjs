@@ -4,9 +4,9 @@ import http from "node:http";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { startServer } from "../dist/server.js";
+import { startServer, normalizeBasePath, combinePaths } from "../dist/server.js";
 
-async function fixture(t, files, definitions) {
+async function fixture(t, files, definitions, defaultServerOptions = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), "freesls-server-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   for (const [name, source] of Object.entries(files))
@@ -22,11 +22,12 @@ async function fixture(t, files, definitions) {
       ),
     );
   });
-  async function listen(routes = definitions) {
+  async function listen(routes = definitions, serverOptions = defaultServerOptions) {
     const server = await startServer(
       routes.map(route => ({ functionName: "test", method: "any", environment: {}, ...route })),
       0,
       directory,
+      serverOptions,
     );
     servers.push(server);
     return (url, options = {}) =>
@@ -436,5 +437,77 @@ test(
     assert.equal(htmlRes.status, 200);
     assert.equal(htmlRes.headers["content-type"], "text/html; charset=utf-8");
     assert.equal(htmlRes.body.toString(), "<h1>Hi</h1>");
+  },
+);
+
+test("normalizeBasePath and combinePaths format paths properly", () => {
+  assert.equal(normalizeBasePath(undefined), "");
+  assert.equal(normalizeBasePath(""), "");
+  assert.equal(normalizeBasePath("/"), "");
+  assert.equal(normalizeBasePath("///"), "");
+  assert.equal(normalizeBasePath("medical-history-app"), "/medical-history-app");
+  assert.equal(normalizeBasePath("/medical-history-app"), "/medical-history-app");
+  assert.equal(normalizeBasePath("/medical-history-app/"), "/medical-history-app");
+  assert.equal(normalizeBasePath("api/v1/"), "/api/v1");
+
+  assert.equal(combinePaths("", "/test"), "/test");
+  assert.equal(combinePaths("", "test"), "/test");
+  assert.equal(
+    combinePaths("medical-history-app", "/request-medical-history"),
+    "/medical-history-app/request-medical-history",
+  );
+  assert.equal(
+    combinePaths("/medical-history-app/", "request-medical-history"),
+    "/medical-history-app/request-medical-history",
+  );
+  assert.equal(combinePaths("/medical-history-app", "/"), "/medical-history-app");
+  assert.equal(combinePaths("/medical-history-app", ""), "/medical-history-app");
+});
+
+test(
+  "server routes requests with basePath prefix and exposes full path in event",
+  { concurrency: false },
+  async t => {
+    const { request } = await fixture(
+      t,
+      {
+        "handler.ts": `
+    export function echo(event: any) {
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          path: event.path,
+          rawPath: event.rawPath,
+          resource: event.resource,
+          params: event.pathParameters,
+        }),
+      };
+    }
+  `,
+      },
+      [
+        { path: "/request-medical-history", handler: "handler.echo" },
+        { path: "/users/{id}", handler: "handler.echo" },
+      ],
+      { basePath: "medical-history-app" },
+    );
+
+    // Matches with prefix
+    const prefixedRes = await request("/medical-history-app/request-medical-history");
+    assert.equal(prefixedRes.status, 200);
+    const prefixedData = prefixedRes.json();
+    assert.equal(prefixedData.path, "/medical-history-app/request-medical-history");
+    assert.equal(prefixedData.resource, "/request-medical-history");
+
+    // Path parameters under basePath
+    const paramRes = await request("/medical-history-app/users/user-456");
+    assert.equal(paramRes.status, 200);
+    const paramData = paramRes.json();
+    assert.equal(paramData.path, "/medical-history-app/users/user-456");
+    assert.deepEqual(paramData.params, { id: "user-456" });
+
+    // Requests without prefix return 404
+    const unprefixedRes = await request("/request-medical-history");
+    assert.equal(unprefixedRes.status, 404);
   },
 );

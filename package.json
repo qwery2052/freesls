@@ -1,6 +1,6 @@
 {
   "name": "freesls",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "description": "Offline API Gateway & AWS Lambda runner for Serverless Framework & AWS SAM with TypeScript and SSM support",
   "type": "module",
   "bin": {

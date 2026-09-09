@@ -37,10 +37,15 @@ function parseCliParameters(parameterEntries?: string[]): Record<string, string>
 program
   .name("freesls")
   .description("Offline API Gateway & Lambda Runner (Serverless Framework & AWS SAM)")
-  .version("0.2.4", "-v, --version", "Output the current version number")
+  .version("0.3.0", "-v, --version", "Output the current version number")
   .option("-s, --stage <stage>", "Deployment stage", "develop")
   .option("-r, --region <region>", "AWS region", "us-east-1")
   .option("-p, --port <port>", "Local HTTP server port", "4000")
+  .option(
+    "-b, --base-path <path>",
+    "Base path prefix for all endpoints (e.g. /medical-history-app)",
+  )
+  .option("--prefix <prefix>", "Alias for --base-path")
   .option("--profile <profile>", "AWS CLI/SSO credential profile")
   .option("--param <params...>", "Parameters as key=value (e.g. deploymentStage=develop)")
   .option("--sam", "Use an AWS SAM template (template.yaml/template.yml)")
@@ -58,6 +63,8 @@ program
       ) {
         throw new Error("Invalid --port. Expected an integer between 1 and 65535.");
       }
+
+      const basePath = (commandOptions.basePath || commandOptions.prefix || "").trim();
 
       if (commandOptions.profile) {
         process.env.AWS_PROFILE = commandOptions.profile;
@@ -96,13 +103,15 @@ program
         serverPort,
         commandOptions.stage,
         framework || (isSamMode ? "sam" : "serverless"),
+        basePath,
       );
       printEnvironmentSummary(globalEnv, Boolean(commandOptions.showEnv));
-      printRoutes(routes, serverPort);
+      printRoutes(routes, serverPort, basePath);
 
       const serverInstance = await startServer(routes, serverPort, process.cwd(), {
         stage: commandOptions.stage,
         region: commandOptions.region,
+        basePath,
       });
 
       const handleShutdown = () => {

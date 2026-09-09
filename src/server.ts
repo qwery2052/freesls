@@ -29,6 +29,30 @@ export function serverlessPathToExpressPath(serverlessPath: string): string {
 }
 
 /**
+ * Normalize an optional base path prefix (e.g. "medical-history-app" -> "/medical-history-app").
+ */
+export function normalizeBasePath(basePath?: string): string {
+  if (!basePath) return "";
+  const trimmed = basePath.trim().replace(/^\/+|\/+$/g, "");
+  return trimmed ? `/${trimmed}` : "";
+}
+
+/**
+ * Safely combine a base path prefix and a route path without duplicate slashes.
+ */
+export function combinePaths(basePath?: string, routePath = ""): string {
+  const normalizedBase = normalizeBasePath(basePath);
+  const normalizedRoute = routePath.startsWith("/") ? routePath : `/${routePath}`;
+  if (!normalizedBase) {
+    return normalizedRoute;
+  }
+  if (normalizedRoute === "/") {
+    return normalizedBase;
+  }
+  return `${normalizedBase}${normalizedRoute}`;
+}
+
+/**
  * Resolve TypeScript or JavaScript handler files relative to the project.
  */
 export function resolveHandlerPath(
@@ -459,8 +483,10 @@ export function createServerApp(
     nextFunction();
   });
 
+  const basePath = normalizeBasePath(options.basePath);
+
   for (const route of routes) {
-    const expressPath = serverlessPathToExpressPath(route.path);
+    const expressPath = combinePaths(basePath, serverlessPathToExpressPath(route.path));
     const normalizedMethod = route.method.toLowerCase();
 
     const handlerMiddleware = async (request: Request, response: Response) => {
@@ -557,13 +583,14 @@ export async function startServer(
   routes: RouteDefinition[],
   port: number,
   workingDirectory: string,
-  options: { stage?: string; region?: string } = {},
+  options: { stage?: string; region?: string; basePath?: string } = {},
 ): Promise<http.Server> {
   const app = createServerApp(routes, {
     port,
     workingDir: workingDirectory,
     stage: options.stage,
     region: options.region,
+    basePath: options.basePath,
   });
 
   return new Promise((resolve, reject) => {

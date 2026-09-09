@@ -117,12 +117,13 @@ Or add a script to your `package.json`:
 | `--sls`      | `-sls`     | Uses Serverless Framework template (`serverless.yml`)                         | `true` (default)                 |
 | `--stage`    | `-s`       | Target deployment stage (`dev`, `staging`, `prod`)                            | `develop`                        |
 | `--region`   | `-r`       | AWS region for SSM and Lambda context                                         | `us-east-1`                      |
-| `--port`     | `-p`       | HTTP port for the local server                                                | `4000`                           |
-| `--profile`  |            | AWS CLI / AWS SSO profile name                                                | System environment credentials   |
-| `--param`    |            | Custom key=value parameters (injected into `process.env`)                     | `{}`                             |
-| `--no-ssm`   |            | Disables AWS SSM queries (uses `ssm.env`, YAML fallbacks, or mocks)           | `false` (queries real AWS SSM)   |
-| `--show-env` |            | Displays full, unmasked environment variables in console                      | `false` (masks sensitive values) |
-| `--version`  | `-v`, `-V` | Displays the installed FreeSLS version                                        |                                  |
+| `--port`      | `-p`             | HTTP port for the local server                                                | `4000`                           |
+| `--base-path` | `-b`, `--prefix` | Base path prefix for all endpoints (e.g. `/medical-history-app`)               | `""` (root `/`)                  |
+| `--profile`   |                  | AWS CLI / AWS SSO profile name                                                | System environment credentials   |
+| `--param`     |                  | Custom key=value parameters (injected into `process.env`)                     | `{}`                             |
+| `--no-ssm`    |                  | Disables AWS SSM queries (uses `ssm.env`, YAML fallbacks, or mocks)           | `false` (queries real AWS SSM)   |
+| `--show-env`  |                  | Displays full, unmasked environment variables in console                      | `false` (masks sensitive values) |
+| `--version`   | `-v`, `-V`       | Displays the installed FreeSLS version                                        |                                  |
 
 > [!WARNING]
 > **AWS SAM Mode (`--sam`) is Experimental**
@@ -137,6 +138,9 @@ freesls -v
 
 # Run Serverless Framework in 'dev' stage on port 4000 using an AWS SSO profile
 freesls -s dev -p 4000 --profile my-org-dev
+
+# Run with a custom base path prefix (e.g. http://localhost:4000/medical-history-app/...)
+freesls -s dev -p 4000 --base-path /medical-history-app
 
 # Run AWS SAM project in 'dev' stage
 freesls -sam -s dev -p 4000 --profile my-org-dev
