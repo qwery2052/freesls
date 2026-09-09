@@ -58,8 +58,88 @@ async function fixture(t, files, definitions, defaultServerOptions = {}) {
         request.end(options.body);
       });
   }
-  return { request: await listen(), listen };
+  return { request: await listen(), listen, directory };
 }
+
+test("circular controllers and services share instances and reload between requests", async t => {
+  const service = value => `import { controller } from './app.module';
+    export class Service {
+      value = '${value}';
+      loaded = process.env.FREESLS_CIRCULAR_ENV;
+      same(instance) { return controller === instance; }
+    }`;
+  const { request, directory } = await fixture(
+    t,
+    {
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: {
+          baseUrl: ".",
+          target: "ES2020",
+          experimentalDecorators: true,
+          paths: { "@app/*": ["./*"] },
+        },
+      }),
+      "handler.ts": `import { controller } from 'app.module';
+      import { service } from '@app/app.module';
+      export async function run(event) {
+        return { body: JSON.stringify({ ...(await controller.run(event)), same: service.same(controller), loaded: service.loaded }) };
+      }`,
+      "app.module.ts": `import { Controller } from './controller';
+      import { Service } from './service';
+      export const controller = new Controller();
+      export const service = new Service();`,
+      "controller.ts": `import { service } from './app.module';
+      import { Body } from './body';
+      class Dto { message!: string; }
+      export class Controller {
+        @Body(Dto)
+        async run(event) { return { value: service.value, message: event.body.message }; }
+      }`,
+      "body.ts": `export const Body = dto => (_target, _key, descriptor) => {
+      const original = descriptor.value;
+      descriptor.value = function(event) {
+        event.body = Object.assign(new dto(), JSON.parse(event.body));
+        return original.call(this, event);
+      };
+      return descriptor;
+    };`,
+      "service.ts": service("first"),
+    },
+    ["first", "second"].map(value => ({
+      path: `/${value}`,
+      handler: "handler.run",
+      environment: { FREESLS_CIRCULAR_ENV: value },
+    })),
+  );
+  for (const value of ["first", "second"]) {
+    await writeFile(path.join(directory, "service.ts"), service(value));
+    const response = await request(`/${value}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: '{"message":"hello"}',
+    });
+    assert.equal(response.status, 200, response.body.toString());
+    assert.deepEqual(response.json(), { value, message: "hello", same: true, loaded: value });
+  }
+  await writeFile(
+    path.join(directory, "service.ts"),
+    "throw new Error('load failed'); export class Service {}",
+  );
+  assert.equal((await request("/first")).json().errorMessage, "load failed");
+  await writeFile(path.join(directory, "service.ts"), service("recovered"));
+  const recovered = await request("/first", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: '{"message":"hello"}',
+  });
+  assert.equal(recovered.status, 200, recovered.body.toString());
+  assert.deepEqual(recovered.json(), {
+    value: "recovered",
+    message: "hello",
+    same: true,
+    loaded: "first",
+  });
+});
 
 test(
   "serializes import/invocation/restoration globally, including failures",

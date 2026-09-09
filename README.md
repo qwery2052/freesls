@@ -305,6 +305,7 @@ provider:
 ### Local Execution Limits
 
 - Invocations run serially in the same Node.js process so environment overrides do not overlap. Handler loading happens inside that environment scope, and source maps remain enabled for debugging.
+- Transformed modules share a filename-normalized cache within each invocation, including circular imports through aliases and relative paths on Windows. The cache is discarded between invocations so source edits and route environments are reloaded. Cycles that use an export before it is initialized can still fail; FreeSLS does not reproduce esbuild's bundling semantics or execute Serverless build plugins.
 - Native JavaScript modules and dependencies may retain their first import-time environment values through module caching. Functions sharing those modules do not have separate Lambda execution environments. Restart FreeSLS after changing configuration.
 - The context's 30-second remaining-time clock is advisory, not an enforced timeout. A handler that never completes blocks subsequent invocations. Detached background work is not isolated, and `callbackWaitsForEmptyEventLoop` does not enable event-loop draining.
 - Handlers may complete through a callback, context completion method, returned promise, or synchronous result. A bare synchronous `undefined` return waits for callback/context completion; the first completion wins.

@@ -31,7 +31,7 @@ export function printBanner(
       : pc.bold(pc.bgMagenta(pc.white(" SLS ")));
 
   const bannerArt = `
-   ${pc.magenta("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.3.0")}  ${frameworkBadge}
+   ${pc.magenta("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.3.1")}  ${frameworkBadge}
   ${pc.magenta("( o.o )")}  ${pc.dim("Offline API Gateway & Lambda Runner")}
    ${pc.magenta("> ^ <")}   ${pc.green("●")} Service: ${pc.bold(serviceName)} ${pc.dim(`[stage: ${stage}]`)}
   `;
