@@ -137,6 +137,118 @@ test(
   },
 );
 
+test("instantiates decorated DTOs with inherited tsconfig, aliases and metadata", async t => {
+  const originalMetadata = Reflect.metadata;
+  const metadata = new WeakMap();
+  Reflect.metadata = (key, value) => (target, property) => {
+    if (!metadata.has(target)) metadata.set(target, {});
+    (metadata.get(target)[property ?? "class"] ??= {})[key] = value;
+  };
+  t.after(() => {
+    if (originalMetadata === undefined) delete Reflect.metadata;
+    else Reflect.metadata = originalMetadata;
+  });
+  // A minimal metadata consumer keeps this fixture independent of external packages.
+  globalThis.__freeslsReadMetadata = (target, property, key) => {
+    for (; target; target = Object.getPrototypeOf(target)) {
+      const value = metadata.get(target)?.[property ?? "class"]?.[key];
+      if (value) return Array.isArray(value) ? value.map(type => type.name) : value.name;
+    }
+    return null;
+  };
+  t.after(() => delete globalThis.__freeslsReadMetadata);
+  for (const useDefineForClassFields of [true, false]) {
+    const { request } = await fixture(
+      t,
+      {
+        "base.json": JSON.stringify({
+          compilerOptions: {
+            target: "ES2022",
+            module: "CommonJS",
+            strict: true,
+            experimentalDecorators: true,
+            emitDecoratorMetadata: true,
+            useDefineForClassFields,
+            baseUrl: ".",
+            paths: { "@dto/*": ["./*"] },
+            noEmit: true,
+            importHelpers: true,
+          },
+        }),
+        "tsconfig.json": '{ "extends": "./base.json" }',
+        "dependency.mjs": 'await Promise.resolve(); export default "async-esm";',
+        "common.cjs": 'module.exports = { value: "commonjs" };',
+        "model.ts": "export class Model {}",
+        "dto.ts": `import { Model } from '@dto/model';
+        function dec(...args: unknown[]) { return (...args: unknown[]) => {}; }
+        class Base { @dec() inherited: string = 'base'; }
+        @dec()
+        export class Dto extends Base {
+          @dec() message!: string;
+          @dec() optional?: number;
+          @dec() initialized: string = 'ready';
+          @dec() model!: Model;
+          constructor(@dec() model: Model) { super(); this.model = model; this.message = 'hello'; }
+          @dec() method(@dec() value: number): string { return String(value); }
+        }`,
+        "handler.ts": `import { Dto } from '@dto/dto';
+        import { Model } from '@dto/model';
+        import esm from './dependency.mjs';
+        import common from './common.cjs';
+        const loaded = await Promise.resolve(esm);
+        export default { run() {
+          const dto = new Dto(new Model());
+          const read = globalThis.__freeslsReadMetadata;
+          return { statusCode: 200, body: JSON.stringify({
+            message: dto.message, optional: dto.optional ?? null, initialized: dto.initialized,
+            inherited: dto.inherited, ownOptional: Object.hasOwn(dto, 'optional'),
+            metadata: ['message', 'optional', 'initialized', 'inherited', 'model'].map(
+              key => read(Dto.prototype, key, 'design:type')),
+            params: read(Dto, undefined, 'design:paramtypes'),
+            methodParams: read(Dto.prototype, 'method', 'design:paramtypes'),
+            returns: read(Dto.prototype, 'method', 'design:returntype'),
+            loaded, common: common.value, url: import.meta.url.endsWith('/handler.ts')
+          }) };
+        } };`,
+      },
+      [{ path: "/dto", handler: "handler.run" }],
+    );
+    for (let invocation = 0; invocation < 2; invocation++) {
+      const response = await request("/dto");
+      assert.equal(response.status, 200, response.body.toString());
+      assert.deepEqual(response.json(), {
+        message: "hello",
+        optional: null,
+        initialized: "ready",
+        inherited: "base",
+        ownOptional: useDefineForClassFields,
+        metadata: ["String", "Number", "String", "String", "Model"],
+        params: ["Model"],
+        methodParams: ["Number"],
+        returns: "String",
+        loaded: "async-esm",
+        common: "commonjs",
+        url: true,
+      });
+    }
+  }
+});
+
+test("legacy decorated required and optional DTO fields work without tsconfig", async t => {
+  const { request } = await fixture(
+    t,
+    {
+      "handler.ts": `function dec() { return () => {}; }
+      class Dto { @dec() message!: string; @dec() optional?: string; }
+      export function run() { const dto = new Dto(); dto.message = 'ok'; return { body: dto.message }; }`,
+    },
+    [{ path: "/", handler: "handler.run" }],
+  );
+  const response = await request("/");
+  assert.equal(response.status, 200, response.body.toString());
+  assert.equal(response.body.toString(), "ok");
+});
+
 test(
   "callback, context, promise and sync completion do not depend on arity",
   { concurrency: false },
@@ -288,5 +400,41 @@ test(
     assert.equal(cors.status, 204);
     assert.equal(cors.headers["access-control-allow-origin"], "*");
     assert.equal(cors.headers["access-control-allow-credentials"], undefined);
+  },
+);
+
+test(
+  "omitted Content-Type infers application/json for JSON body and text/plain for text",
+  { concurrency: false },
+  async t => {
+    const { request } = await fixture(
+      t,
+      {
+        "handler.ts": `
+    export function jsonString() { return { statusCode: 200, body: JSON.stringify({ token: "abc", count: 123 }) }; }
+    export function textString() { return { statusCode: 200, body: "plain text message" }; }
+    export function explicitHtml() { return { statusCode: 200, headers: { "Content-Type": "text/html; charset=utf-8" }, body: "<h1>Hi</h1>" }; }
+  `,
+      },
+      [
+        { path: "/json", handler: "handler.jsonString" },
+        { path: "/text", handler: "handler.textString" },
+        { path: "/html", handler: "handler.explicitHtml" },
+      ],
+    );
+    const jsonRes = await request("/json");
+    assert.equal(jsonRes.status, 200);
+    assert.match(jsonRes.headers["content-type"], /^application\/json/);
+    assert.deepEqual(jsonRes.json(), { token: "abc", count: 123 });
+
+    const textRes = await request("/text");
+    assert.equal(textRes.status, 200);
+    assert.match(textRes.headers["content-type"], /^text\/plain/);
+    assert.equal(textRes.body.toString(), "plain text message");
+
+    const htmlRes = await request("/html");
+    assert.equal(htmlRes.status, 200);
+    assert.equal(htmlRes.headers["content-type"], "text/html; charset=utf-8");
+    assert.equal(htmlRes.body.toString(), "<h1>Hi</h1>");
   },
 );

@@ -29,6 +29,7 @@
 > **Active Development & Current Scope**
 >
 > - 🚧 **Work in Progress:** FreeSLS is under active and continuous development. Improvements, fixes, and new features are being released regularly.
+> - 🧪 **AWS SAM Mode (Experimental):** Running AWS SAM projects (`--sam`) is currently experimental and under active development. Emulation of complex CloudFormation features is partial.
 > - ⚡ **Current Scope:** FreeSLS currently focuses specifically on running **AWS Lambda functions invoked via HTTP and HTTP API events (API Gateway)** for both **Serverless Framework** (`serverless.yml`) and **AWS SAM** (`template.yaml` / `template.yml`). Support for additional triggers (such as SQS, SNS, EventBridge, S3) is planned for upcoming releases. Feedback and suggestions are warmly welcomed!
 
 ---
@@ -41,6 +42,9 @@ Traditional local emulation tools for Serverless Framework and AWS SAM often req
 
 - **Dual Framework Support**: Run both **Serverless Framework** (`serverless.yml`) and **AWS SAM** (`template.yaml` / `template.yml`) with a single tool.
 - **Zero Build Configuration**: Run TypeScript (`.ts`, `.tsx`) and JavaScript (`.js`, `.mjs`, `.cjs`) handlers directly using [jiti](https://github.com/unjs/jiti) with built-in source maps.
+
+  TypeScript handlers use the TypeScript compiler for fields and decorators, then Jiti for module loading and path aliases. The nearest `tsconfig.json` (including `extends`) supplies target, class-field, decorator, and JSX options. Legacy decorators and decorator metadata default to enabled when unspecified, matching Jiti's previous defaults. Applications must load their own metadata runtime (such as `reflect-metadata`) before decorated classes. Loading transpiles individual files without type-checking; metadata requiring cross-file type inference is not available. Build output and module settings do not override Jiti's loader. Restart after changing path aliases.
+
 - **Real AWS SSM Resolution or Local Mocks**: Fetch real parameters from AWS Parameter Store using your AWS SSO/CLI profiles, or run completely offline with `--no-ssm` using `ssm.env`, fallbacks, or automatic mocks.
 - **CLI Parameter Injection**: Custom arguments passed via `--param key=value` are automatically exported to `process.env`.
 - **Advanced Variable Resolution**: Native support for `${self:...}`, `${opt:...}`, `${env:...}`, `${param:...}`, `${aws:...}`, CloudFormation pseudo parameters (`${AWS::Region}`, `${AWS::AccountId}`), and fallback chains (`${ssm:/path, env:VAR, 'fallback'}`).
@@ -107,21 +111,30 @@ Or add a script to your `package.json`:
 
 ### CLI Flags
 
-| Flag         | Alias  | Description                                                         | Default                          |
-| ------------ | ------ | ------------------------------------------------------------------- | -------------------------------- |
-| `--sam`      | `-sam` | Uses AWS SAM template (`template.yaml` / `template.yml`)            | `false`                          |
-| `--sls`      | `-sls` | Uses Serverless Framework template (`serverless.yml`)               | `true` (default)                 |
-| `--stage`    | `-s`   | Target deployment stage (`dev`, `staging`, `prod`)                  | `develop`                        |
-| `--region`   | `-r`   | AWS region for SSM and Lambda context                               | `us-east-1`                      |
-| `--port`     | `-p`   | HTTP port for the local server                                      | `4000`                           |
-| `--profile`  |        | AWS CLI / AWS SSO profile name                                      | System environment credentials   |
-| `--param`    |        | Custom key=value parameters (injected into `process.env`)           | `{}`                             |
-| `--no-ssm`   |        | Disables AWS SSM queries (uses `ssm.env`, YAML fallbacks, or mocks) | `false` (queries real AWS SSM)   |
-| `--show-env` |        | Displays full, unmasked environment variables in console            | `false` (masks sensitive values) |
+| Flag         | Alias      | Description                                                                   | Default                          |
+| ------------ | ---------- | ----------------------------------------------------------------------------- | -------------------------------- |
+| `--sam`      | `-sam`     | 🧪 **Experimental:** Uses AWS SAM template (`template.yaml` / `template.yml`) | `false`                          |
+| `--sls`      | `-sls`     | Uses Serverless Framework template (`serverless.yml`)                         | `true` (default)                 |
+| `--stage`    | `-s`       | Target deployment stage (`dev`, `staging`, `prod`)                            | `develop`                        |
+| `--region`   | `-r`       | AWS region for SSM and Lambda context                                         | `us-east-1`                      |
+| `--port`     | `-p`       | HTTP port for the local server                                                | `4000`                           |
+| `--profile`  |            | AWS CLI / AWS SSO profile name                                                | System environment credentials   |
+| `--param`    |            | Custom key=value parameters (injected into `process.env`)                     | `{}`                             |
+| `--no-ssm`   |            | Disables AWS SSM queries (uses `ssm.env`, YAML fallbacks, or mocks)           | `false` (queries real AWS SSM)   |
+| `--show-env` |            | Displays full, unmasked environment variables in console                      | `false` (masks sensitive values) |
+| `--version`  | `-v`, `-V` | Displays the installed FreeSLS version                                        |                                  |
+
+> [!WARNING]
+> **AWS SAM Mode (`--sam`) is Experimental**
+>
+> Emulation for AWS SAM is currently in active **beta / experimental** development. Supported intrinsic functions include `Ref`, `Fn::GetAtt`, `Fn::Sub`, and SSM dynamic references (`{{resolve:ssm:...}}`). Advanced CloudFormation capabilities (such as complex `Mappings`, nested stacks, or unsupported intrinsic functions) are partial.
 
 ### Common Examples
 
 ```bash
+# Check installed version
+freesls -v
+
 # Run Serverless Framework in 'dev' stage on port 4000 using an AWS SSO profile
 freesls -s dev -p 4000 --profile my-org-dev
 

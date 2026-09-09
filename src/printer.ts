@@ -30,7 +30,7 @@ export function printBanner(
       : pc.bold(pc.bgMagenta(pc.white(" SLS ")));
 
   const bannerArt = `
-   ${pc.magenta("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.2.1")}  ${frameworkBadge}
+   ${pc.magenta("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.2.4")}  ${frameworkBadge}
   ${pc.magenta("( o.o )")}  ${pc.dim("Offline API Gateway & Lambda Runner")}
    ${pc.magenta("> ^ <")}   ${pc.green("●")} Service: ${pc.bold(serviceName)} ${pc.dim(`[stage: ${stage}]`)}
   `;
@@ -110,4 +110,32 @@ export function printRoutes(routes: RouteDefinition[], port: number) {
 
   console.log(pc.dim("─".repeat(60)));
   console.log(pc.italic(pc.dim("  Ready for requests... (Ctrl+C to exit)\n")));
+}
+
+export function printSsmResolutionError(
+  missingParameters: string[],
+  _context: { profile?: string; region?: string } = {},
+) {
+  const countText = missingParameters.length > 1 ? ` (${missingParameters.length})` : "";
+  console.log(
+    `\n ${pc.magenta("🐾 (x.x)")} ${pc.bold(pc.red(`Missing SSM Parameters${countText}:`))}`,
+  );
+
+  for (const param of missingParameters) {
+    console.log(`   ${pc.red("✖")} ${pc.bold(pc.yellow(param))}`);
+    if (param.includes(":")) {
+      const selector = param.slice(param.indexOf(":") + 1);
+      if (/^\d+$/.test(selector) && Number(selector) > 50) {
+        console.log(
+          pc.dim(`     └─ `) +
+            pc.cyan(`⚠️  ':${selector}'`) +
+            pc.dim(` is treated as an SSM version, not a port or default value.`),
+        );
+      }
+    }
+  }
+
+  console.log(
+    `\n   ${pc.cyan("💡 Tip:")} ${pc.dim("Add to")} ${pc.bold(pc.white("ssm.env"))} ${pc.dim("or run with")} ${pc.cyan("--no-ssm")} ${pc.dim("to test offline")}\n`,
+  );
 }
