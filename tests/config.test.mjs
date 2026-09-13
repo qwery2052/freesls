@@ -405,3 +405,45 @@ for (const framework of ["sam", "serverless"]) {
     );
   });
 }
+
+test("Serverless safely ignores unsupported resource references in environment and parses CF tags", async t => {
+  const directory = await fixture(t, {
+    "serverless.yml": `service: test-service
+provider:
+  name: aws
+  environment:
+    PLAIN_VAR: "simple-value"
+    QUEUE_URL: !Ref MyQueue
+    QUEUE_ARN: !GetAtt MyQueue.Arn
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action: kms:Decrypt
+          Resource: !If
+            - KmsKeyIsArn
+            - arn:aws:kms:region:account:key/123
+            - !Sub 'arn:aws:kms:\${AWS::Region}:\${AWS::AccountId}:key/123'
+resources:
+  Conditions:
+    KmsKeyIsArn: !Equals
+      - !Select [0, !Split [':', 'arn:aws:kms']]
+      - arn
+functions:
+  hello:
+    handler: index.handler
+    events:
+      - http:
+          path: /hello
+          method: get
+`,
+  });
+
+  const result = await loadServerlessConfig(directory, options);
+  assert.equal(result.routes.length, 1);
+  assert.equal(result.routes[0].path, "/hello");
+  assert.equal(result.routes[0].environment.PLAIN_VAR, "simple-value");
+  assert.equal(result.routes[0].environment.QUEUE_URL, "");
+  assert.equal(result.routes[0].environment.QUEUE_ARN, "");
+});
+

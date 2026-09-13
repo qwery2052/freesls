@@ -24,14 +24,16 @@ export function printBanner(
   stage: string,
   framework: "serverless" | "sam" = "serverless",
   basePath = "",
+  debug = false,
 ) {
   const frameworkBadge =
     framework === "sam"
       ? pc.bold(pc.bgYellow(pc.black(" AWS SAM ")))
       : pc.bold(pc.bgMagenta(pc.white(" SLS ")));
+  const debugBadge = debug ? `  ${pc.bold(pc.bgGreen(pc.black(" DEBUG ")))}` : "";
 
   const bannerArt = `
-   ${pc.magenta("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.3.1")}  ${frameworkBadge}
+   ${pc.magenta("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.3.6")}  ${frameworkBadge}${debugBadge}
   ${pc.magenta("( o.o )")}  ${pc.dim("Offline API Gateway & Lambda Runner")}
    ${pc.magenta("> ^ <")}   ${pc.green("●")} Service: ${pc.bold(serviceName)} ${pc.dim(`[stage: ${stage}]`)}
   `;
@@ -45,6 +47,40 @@ export function printBanner(
     ` ${pc.bold("Local Endpoint:")} ${pc.underline(pc.cyan(`http://localhost:${port}${cleanBase}`))}`,
   );
   console.log(pc.dim("─".repeat(60)));
+}
+
+export function logDebug(stage: string, message: string, elapsedMs?: number, requestId?: string) {
+  const timestamp = new Date().toISOString().slice(11, 23);
+  const reqTag = requestId ? pc.dim(`[${requestId}] `) : "";
+  const timing = elapsedMs !== undefined ? pc.green(` (+${elapsedMs}ms)`) : "";
+  const stageTag = pc.bold(pc.green(`[${stage}]`));
+  console.log(
+    `  ${pc.bold(pc.green("[DEBUG]"))} ${pc.dim(timestamp)} ${reqTag}${stageTag} ${message}${timing}`,
+  );
+}
+
+export function printDebugHeaders(headers: Record<string, string>, requestId?: string) {
+  const reqTag = requestId ? pc.dim(` [${requestId}]`) : "";
+  const headerEntries = Object.entries(headers);
+  const borderLength = 66;
+
+  console.log(
+    `\n  ${pc.bold(pc.magenta("/////////////////////"))} ${pc.magenta("🐾")} ${pc.bold(pc.green("/\\_/\\"))} ${pc.bold(pc.cyan("HEADERS"))}${reqTag} ${pc.bold(pc.magenta("/".repeat(Math.max(4, borderLength - 36 - (requestId ? requestId.length + 3 : 0)))))}`,
+  );
+
+  if (headerEntries.length === 0) {
+    console.log(`     ${pc.dim("(no headers received)")}`);
+  } else {
+    for (const [key, value] of headerEntries) {
+      console.log(
+        `   ${pc.magenta("🐾")} ${pc.bold(pc.cyan(key.padEnd(26)))} ${pc.dim("=")} ${pc.white(value)}`,
+      );
+    }
+  }
+
+  console.log(
+    `  ${pc.bold(pc.magenta("/".repeat(borderLength - 14)))} ${pc.bold(pc.green("(=^･ω･^=)///"))}\n`,
+  );
 }
 
 function maskSensitiveValue(valueToMask: string): string {

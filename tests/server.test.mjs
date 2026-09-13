@@ -591,3 +591,181 @@ test(
     assert.equal(unprefixedRes.status, 404);
   },
 );
+
+test(
+  "server accepts any custom header in CORS preflight and preserves casing in event",
+  { concurrency: false },
+  async t => {
+    const { request } = await fixture(
+      t,
+      {
+        "handler.ts": `
+    export function echoHeaders(event: any) {
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          exactKey: event.headers?.sessionToken,
+          lowerKey: event.headers?.sessiontoken,
+          allHeaders: event.headers,
+        }),
+      };
+    }
+  `,
+      },
+      [{ path: "/token-check", handler: "handler.echoHeaders" }],
+    );
+
+    // Preflight with arbitrary headers
+    const cors = await request("/token-check", {
+      method: "OPTIONS",
+      headers: {
+        "access-control-request-headers": "sessionToken, X-Custom-Header, x-api-key",
+      },
+    });
+    assert.equal(cors.status, 204);
+    assert.equal(cors.headers["access-control-allow-origin"], "*");
+    assert.equal(
+      cors.headers["access-control-allow-headers"],
+      "sessionToken, X-Custom-Header, x-api-key",
+    );
+
+    // Actual request with custom header
+    const res = await request("/token-check", {
+      method: "POST",
+      headers: {
+        sessionToken: "secop-secret-token-123",
+      },
+    });
+    assert.equal(res.status, 200);
+    const data = res.json();
+    assert.equal(data.exactKey, "secop-secret-token-123");
+    assert.equal(data.lowerKey, "secop-secret-token-123");
+  },
+);
+
+test("local CORS supports credentialed login across origins and error responses", async t => {
+  const { request } = await fixture(
+    t,
+    {
+      "handler.ts": `export function login(event) {
+      if (event.path === '/error') throw new Error('Login failed');
+      return {
+        statusCode: 200,
+        headers: { 'Access-Control-Allow-Origin': '*', Vary: 'Accept', 'X-Session': 'test' },
+        multiValueHeaders: {
+          'Access-Control-Allow-Credentials': ['false'],
+          'Set-Cookie': ['session=test; HttpOnly; Path=/', 'refresh=test; HttpOnly; Path=/'],
+        },
+        body: JSON.stringify({ cookie: event.headers.cookie, token: event.headers.authorization }),
+      };
+    }`,
+    },
+    [
+      { path: "/secop/login", handler: "handler.login" },
+      { path: "/error", handler: "handler.login" },
+    ],
+  );
+
+  for (const origin of ["http://localhost:3000", "http://localhost:5173"]) {
+    const preflight = await request("/secop/login", {
+      method: "OPTIONS",
+      headers: {
+        origin,
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "content-type, authorization, sessionToken",
+      },
+    });
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers["access-control-allow-origin"], origin);
+    assert.equal(preflight.headers["access-control-allow-credentials"], "true");
+    assert.match(preflight.headers["access-control-allow-methods"], /POST/);
+    assert.equal(
+      preflight.headers["access-control-allow-headers"],
+      "content-type, authorization, sessionToken",
+    );
+
+    const login = await request("/secop/login", {
+      method: "POST",
+      headers: { origin, cookie: "session=previous", authorization: "Bearer test" },
+    });
+    assert.equal(login.status, 200);
+    assert.equal(login.headers["access-control-allow-origin"], origin);
+    assert.equal(login.headers["access-control-allow-credentials"], "true");
+    assert.match(login.headers.vary, /Accept/);
+    assert.match(login.headers.vary, /Origin/);
+    assert.match(login.headers["access-control-expose-headers"], /x-session/);
+    assert.equal(login.headers["set-cookie"].length, 2);
+    assert.deepEqual(login.json(), { cookie: "session=previous", token: "Bearer test" });
+
+    for (const [url, status] of [
+      ["/error", 500],
+      ["/missing", 404],
+    ]) {
+      const error = await request(url, { headers: { origin } });
+      assert.equal(error.status, status);
+      assert.equal(error.headers["access-control-allow-origin"], origin);
+      assert.equal(error.headers["access-control-allow-credentials"], "true");
+    }
+  }
+});
+
+test(
+  "server logs lifecycle debug stages in green when debug option is enabled",
+  { concurrency: false },
+  async t => {
+    const debugLogs = [];
+    const allLogs = [];
+    const originalLog = console.log;
+    console.log = (...args) => {
+      const line = args.join(" ");
+      allLogs.push(line);
+      if (line.includes("[DEBUG]")) {
+        debugLogs.push(line);
+      }
+      originalLog(...args);
+    };
+
+    try {
+      const { request } = await fixture(
+        t,
+        {
+          "handler.ts": `
+      export function debugTest() {
+        return { statusCode: 200, body: JSON.stringify({ ok: true }) };
+      }
+    `,
+        },
+        [{ path: "/debug-trace", handler: "handler.debugTest" }],
+        { debug: true },
+      );
+
+      const res = await request("/debug-trace", {
+        method: "POST",
+        headers: { "x-custom-cat": "meow" },
+      });
+      assert.equal(res.status, 200);
+      assert.deepEqual(res.json(), { ok: true });
+
+      // Verify lifecycle stages were logged
+      const joined = debugLogs.join("\n");
+      assert.match(joined, /\[DEBUG\].*\[ROUTE\]/);
+      assert.match(joined, /\[DEBUG\].*\[INIT\]/);
+      assert.match(joined, /\[DEBUG\].*\[PATH\]/);
+      assert.match(joined, /\[DEBUG\].*\[QUEUE\]/);
+      assert.match(joined, /\[DEBUG\].*\[JITI\]/);
+      assert.match(joined, /\[DEBUG\].*\[EVENT\]/);
+      assert.match(joined, /\[DEBUG\].*\[LAMBDA\]/);
+      assert.match(joined, /\[DEBUG\].*\[RESP\]/);
+      assert.match(joined, /\[DEBUG\].*\[DONE\]/);
+
+      // Verify beautiful cat headers block
+      const fullOutput = allLogs.join("\n");
+      assert.match(fullOutput, /HEADERS/);
+      assert.match(fullOutput, /x-custom-cat/);
+      assert.match(fullOutput, /meow/);
+      assert.ok(fullOutput.includes("(=^･ω･^=)///"));
+    } finally {
+      console.log = originalLog;
+    }
+  },
+);

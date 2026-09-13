@@ -12,7 +12,7 @@ import type {
   LambdaContext,
   ServerOptions,
 } from "./types.js";
-import { formatMethod } from "./printer.js";
+import { formatMethod, logDebug, printDebugHeaders } from "./printer.js";
 import { createTypeScriptTransform } from "./typescript-transform.js";
 
 const DEFAULT_TIMEOUT_MILLISECONDS = 30000;
@@ -144,9 +144,17 @@ function extractHeaders(rawHeaders: string[]): {
   const multiValueHeaders: Record<string, string[]> = Object.create(null);
 
   for (let index = 0; index < rawHeaders.length; index += 2) {
-    const key = rawHeaders[index].toLowerCase();
-    (multiValueHeaders[key] ??= []).push(rawHeaders[index + 1]);
-    headers[key] = rawHeaders[index + 1];
+    const rawKey = rawHeaders[index];
+    const lowerKey = rawKey.toLowerCase();
+    const value = rawHeaders[index + 1];
+
+    (multiValueHeaders[lowerKey] ??= []).push(value);
+    headers[lowerKey] = value;
+
+    if (rawKey !== lowerKey) {
+      (multiValueHeaders[rawKey] ??= []).push(value);
+      headers[rawKey] = value;
+    }
   }
 
   return { headers, multiValueHeaders };
@@ -220,6 +228,9 @@ function buildApiGatewayEvent(
         .filter(Boolean),
     );
     delete headers.cookie;
+    for (const key of Object.keys(headers)) {
+      if (key.toLowerCase() === "cookie") delete headers[key];
+    }
     const routeKey = `${routeDefinition.method.toUpperCase()} ${routeDefinition.path}`;
     return {
       version: "2.0",
@@ -379,6 +390,26 @@ function inferContentType(body: string): string {
   return "text/plain";
 }
 
+// Local CORS is intentionally permissive, including credentialed browser requests.
+function applyLocalCors(response: Response): void {
+  const origin = response.req.header("Origin");
+  response.header("Access-Control-Allow-Origin", origin || "*");
+  response.vary("Origin");
+  if (origin) {
+    response.header("Access-Control-Allow-Credentials", "true");
+  } else {
+    response.removeHeader("Access-Control-Allow-Credentials");
+  }
+  response.header(
+    "Access-Control-Allow-Headers",
+    response.req.header("Access-Control-Request-Headers") || "*",
+  );
+  response.vary("Access-Control-Request-Headers");
+  response.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD");
+  // A wildcard does not expose headers for requests with credentials.
+  response.header("Access-Control-Expose-Headers", response.getHeaderNames().join(", "));
+}
+
 /**
  * Serialize proxy responses, retaining v1 multi-value precedence and v2 cookies.
  */
@@ -422,6 +453,7 @@ function sendLambdaResponse(
     response.setHeader("Set-Cookie", lambdaResult.cookies.map(String));
   }
 
+  applyLocalCors(response);
   response.status(statusCode);
 
   if (lambdaResult?.isBase64Encoded && typeof lambdaResult?.body === "string") {
@@ -453,8 +485,6 @@ export function createServerApp(
 ): express.Express {
   const app = express();
 
-  app.use(express.raw({ type: () => true, limit: "10mb" }));
-
   // Source maps preserve in-process debugging. Transformed modules reload, but
   // Jiti's native ESM/CJS paths still cache modules and their import-time env.
   // Functions sharing native files/dependencies must not rely on isolated snapshots.
@@ -467,21 +497,22 @@ export function createServerApp(
   });
   jitiRuntime.options.transform = createTypeScriptTransform(jitiRuntime.options.transform!);
 
-  // Wildcard origins cannot be combined with credentialed CORS.
+  let requestCounter = 0;
+
   app.use((request: Request, response: Response, nextFunction: NextFunction) => {
-    response.header("Access-Control-Allow-Origin", "*");
-    response.header(
-      "Access-Control-Allow-Headers",
-      "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Amz-Date, X-Api-Key, X-Amz-Security-Token",
-    );
-    response.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD");
+    applyLocalCors(response);
 
     if (request.method === "OPTIONS") {
+      if (options.debug) {
+        logDebug("CORS", `Handled OPTIONS preflight for ${request.path}`);
+      }
       response.status(204).end();
       return;
     }
     nextFunction();
   });
+
+  app.use(express.raw({ type: () => true, limit: "10mb" }));
 
   const basePath = normalizeBasePath(options.basePath);
 
@@ -489,13 +520,62 @@ export function createServerApp(
     const expressPath = combinePaths(basePath, serverlessPathToExpressPath(route.path));
     const normalizedMethod = route.method.toLowerCase();
 
+    if (options.debug) {
+      logDebug(
+        "ROUTE",
+        `Mounted ${route.method.toUpperCase()} ${expressPath} -> ${route.handler} (${route.functionName})`,
+      );
+    }
+
     const handlerMiddleware = async (request: Request, response: Response) => {
       const startTime = Date.now();
+      const reqId = `req-${++requestCounter}`;
+
+      if (options.debug) {
+        logDebug(
+          "INIT",
+          `Incoming ${request.method} ${request.originalUrl || request.path} from ${request.ip || "127.0.0.1"} (body: ${request.body?.length ?? 0}B)`,
+          undefined,
+          reqId,
+        );
+
+        const incomingHeaders: Record<string, string> = {};
+        for (let index = 0; index < request.rawHeaders.length; index += 2) {
+          const key = request.rawHeaders[index];
+          const value = request.rawHeaders[index + 1];
+          incomingHeaders[key] = incomingHeaders[key] ? `${incomingHeaders[key]}, ${value}` : value;
+        }
+        printDebugHeaders(incomingHeaders, reqId);
+      }
 
       try {
+        const resolveStart = Date.now();
         const { filePath, functionName } = resolveHandlerPath(options.workingDir, route.handler);
 
+        if (options.debug) {
+          logDebug(
+            "PATH",
+            `Resolved handler: ${path.relative(options.workingDir, filePath)} -> ${functionName}`,
+            Date.now() - resolveStart,
+            reqId,
+          );
+        }
+
+        const queueWaitStart = Date.now();
+        if (options.debug) {
+          logDebug("QUEUE", `Waiting for execution queue slot...`, undefined, reqId);
+        }
+
         const lambdaResult = await withTemporaryEnvironment(route.environment, async () => {
+          if (options.debug) {
+            logDebug(
+              "QUEUE",
+              `Acquired slot. Injected ${Object.keys(route.environment || {}).length} environment variables`,
+              Date.now() - queueWaitStart,
+              reqId,
+            );
+          }
+
           // Jiti's alias and relative resolvers can return different slash styles on Windows.
           // Share in-progress exports by normalized filename so cycles do not execute twice.
           // A fresh cache per invocation preserves source reloads and route environments.
@@ -505,11 +585,22 @@ export function createServerApp(
             set: (target, key, value) =>
               Reflect.set(target, typeof key === "string" ? path.normalize(key) : key, value),
           });
+
+          const jitiStart = Date.now();
+          if (options.debug) {
+            logDebug("JITI", `Evaluating handler module with Jiti...`, undefined, reqId);
+          }
+
           const importedModule = (await jitiRuntime.evalModule(fs.readFileSync(filePath, "utf8"), {
             filename: filePath,
             async: true,
             cache,
           })) as Record<string, unknown>;
+
+          if (options.debug) {
+            logDebug("JITI", `Module evaluated and loaded`, Date.now() - jitiStart, reqId);
+          }
+
           const defaultExport = importedModule.default;
           const targetHandler =
             importedModule[functionName] ||
@@ -524,16 +615,54 @@ export function createServerApp(
             );
           }
 
+          const eventStart = Date.now();
           const apiGatewayEvent = buildApiGatewayEvent(request, route, options);
-          return invokeLambdaHandler(
+
+          if (options.debug) {
+            logDebug(
+              "EVENT",
+              `Built API Gateway ${route.payloadVersion ?? "1.0"} event (headers: ${Object.keys(apiGatewayEvent.headers || {}).length})`,
+              Date.now() - eventStart,
+              reqId,
+            );
+          }
+
+          const lambdaStart = Date.now();
+          if (options.debug) {
+            logDebug(
+              "LAMBDA",
+              `Invoking "${route.functionName}" (${functionName})...`,
+              undefined,
+              reqId,
+            );
+          }
+
+          const result = await invokeLambdaHandler(
             targetHandler as LambdaHandler,
             apiGatewayEvent,
             route,
             options,
           );
+
+          if (options.debug) {
+            logDebug("LAMBDA", `Handler execution finished`, Date.now() - lambdaStart, reqId);
+          }
+
+          return result;
         });
 
+        const respStart = Date.now();
         sendLambdaResponse(response, lambdaResult, route.payloadVersion ?? "1.0");
+
+        if (options.debug) {
+          logDebug(
+            "RESP",
+            `Response sent to client (HTTP ${response.statusCode})`,
+            Date.now() - respStart,
+            reqId,
+          );
+          logDebug("DONE", `Request roundtrip complete`, Date.now() - startTime, reqId);
+        }
 
         const executionDuration = Date.now() - startTime;
         const statusCode = response.statusCode;
@@ -545,6 +674,16 @@ export function createServerApp(
       } catch (error) {
         const executionError = normalizeError(error);
         const executionDuration = Date.now() - startTime;
+
+        if (options.debug) {
+          logDebug(
+            "ERROR",
+            `${executionError.name || "Error"}: ${executionError.message}`,
+            Date.now() - startTime,
+            reqId,
+          );
+        }
+
         console.error(
           `\n  ${pc.bgRed(pc.white(" LAMBDA ERROR "))} ${pc.bold(pc.white(route.functionName))} ${pc.dim(`(${executionDuration}ms)`)}`,
         );
@@ -596,7 +735,7 @@ export async function startServer(
   routes: RouteDefinition[],
   port: number,
   workingDirectory: string,
-  options: { stage?: string; region?: string; basePath?: string } = {},
+  options: { stage?: string; region?: string; basePath?: string; debug?: boolean } = {},
 ): Promise<http.Server> {
   const app = createServerApp(routes, {
     port,
@@ -604,6 +743,7 @@ export async function startServer(
     stage: options.stage,
     region: options.region,
     basePath: options.basePath,
+    debug: options.debug,
   });
 
   return new Promise((resolve, reject) => {

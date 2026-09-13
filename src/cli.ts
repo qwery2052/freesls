@@ -37,7 +37,7 @@ function parseCliParameters(parameterEntries?: string[]): Record<string, string>
 program
   .name("freesls")
   .description("Offline API Gateway & Lambda Runner (Serverless Framework & AWS SAM)")
-  .version("0.3.1", "-v, --version", "Output the current version number")
+  .version("0.3.6", "-v, --version", "Output the current version number")
   .option("-s, --stage <stage>", "Deployment stage", "develop")
   .option("-r, --region <region>", "AWS region", "us-east-1")
   .option("-p, --port <port>", "Local HTTP server port", "4000")
@@ -52,6 +52,7 @@ program
   .option("--sls", "Use Serverless Framework (serverless.yml) [default]")
   .option("--no-ssm", "Disable AWS SSM queries and use local fallbacks or mocks")
   .option("--show-env", "Display full environment values without masking", false)
+  .option("-d, --debug", "Enable verbose lifecycle debug logging with stage timings", false)
   .action(async commandOptions => {
     try {
       const serverPort = Number(commandOptions.port);
@@ -69,6 +70,7 @@ program
       if (commandOptions.profile) {
         process.env.AWS_PROFILE = commandOptions.profile;
       }
+
       process.env.AWS_REGION = commandOptions.region;
 
       const customParameters = parseCliParameters(commandOptions.param);
@@ -78,8 +80,11 @@ program
       }
 
       const isSamMode = Boolean(commandOptions.sam);
-
       const frameworkDisplayName = isSamMode ? "AWS SAM" : "Serverless Framework";
+
+      if (process.stdout.isTTY) {
+        console.clear();
+      }
 
       console.log(
         pc.dim(
@@ -104,6 +109,7 @@ program
         commandOptions.stage,
         framework || (isSamMode ? "sam" : "serverless"),
         basePath,
+        Boolean(commandOptions.debug),
       );
       printEnvironmentSummary(globalEnv, Boolean(commandOptions.showEnv));
       printRoutes(routes, serverPort, basePath);
@@ -112,6 +118,7 @@ program
         stage: commandOptions.stage,
         region: commandOptions.region,
         basePath,
+        debug: Boolean(commandOptions.debug),
       });
 
       const handleShutdown = () => {
