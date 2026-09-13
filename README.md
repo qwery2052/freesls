@@ -17,7 +17,7 @@
 </p>
 
 ```
-   /\_/\   FreeSLS v0.2.0  [SLS] / [AWS SAM]
+   /\_/\   FreeSLS v0.3.6  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
    > ^ <   ● Service: user-management-api [stage: dev]
 ────────────────────────────────────────────────────────────
@@ -111,18 +111,19 @@ Or add a script to your `package.json`:
 
 ### CLI Flags
 
-| Flag         | Alias      | Description                                                                   | Default                          |
-| ------------ | ---------- | ----------------------------------------------------------------------------- | -------------------------------- |
-| `--sam`      | `-sam`     | 🧪 **Experimental:** Uses AWS SAM template (`template.yaml` / `template.yml`) | `false`                          |
-| `--sls`      | `-sls`     | Uses Serverless Framework template (`serverless.yml`)                         | `true` (default)                 |
-| `--stage`    | `-s`       | Target deployment stage (`dev`, `staging`, `prod`)                            | `develop`                        |
-| `--region`   | `-r`       | AWS region for SSM and Lambda context                                         | `us-east-1`                      |
+| Flag          | Alias            | Description                                                                   | Default                          |
+| ------------- | ---------------- | ----------------------------------------------------------------------------- | -------------------------------- |
+| `--sam`       | `-sam`           | 🧪 **Experimental:** Uses AWS SAM template (`template.yaml` / `template.yml`) | `false`                          |
+| `--sls`       | `-sls`           | Uses Serverless Framework template (`serverless.yml`)                         | `true` (default)                 |
+| `--stage`     | `-s`             | Target deployment stage (`dev`, `staging`, `prod`)                            | `develop`                        |
+| `--region`    | `-r`             | AWS region for SSM and Lambda context                                         | `us-east-1`                      |
 | `--port`      | `-p`             | HTTP port for the local server                                                | `4000`                           |
-| `--base-path` | `-b`, `--prefix` | Base path prefix for all endpoints (e.g. `/medical-history-app`)               | `""` (root `/`)                  |
+| `--base-path` | `-b`, `--prefix` | Base path prefix for all endpoints (e.g. `/medical-history-app`)              | `""` (root `/`)                  |
 | `--profile`   |                  | AWS CLI / AWS SSO profile name                                                | System environment credentials   |
 | `--param`     |                  | Custom key=value parameters (injected into `process.env`)                     | `{}`                             |
 | `--no-ssm`    |                  | Disables AWS SSM queries (uses `ssm.env`, YAML fallbacks, or mocks)           | `false` (queries real AWS SSM)   |
 | `--show-env`  |                  | Displays full, unmasked environment variables in console                      | `false` (masks sensitive values) |
+| `--debug`     | `-d`             | Enables verbose lifecycle debug logging with stage timings                    | `false`                          |
 | `--version`   | `-v`, `-V`       | Displays the installed FreeSLS version                                        |                                  |
 
 > [!WARNING]
@@ -153,6 +154,9 @@ freesls -s dev --param domain=api.local --param deploymentStage=dev
 
 # Display all environment variable values in clear text
 freesls -s dev --show-env
+
+# Run with detailed lifecycle timing logs to trace bottlenecks
+freesls -s dev --debug
 ```
 
 ---
@@ -310,7 +314,7 @@ provider:
 - The context's 30-second remaining-time clock is advisory, not an enforced timeout. A handler that never completes blocks subsequent invocations. Detached background work is not isolated, and `callbackWaitsForEmptyEventLoop` does not enable event-loop draining.
 - Handlers may complete through a callback, context completion method, returned promise, or synchronous result. A bare synchronous `undefined` return waits for callback/context completion; the first completion wins.
 - REST routes use payload v1. HTTP API routes default to v2, with Serverless `provider.httpApi.payload` and SAM event `PayloadFormatVersion` overrides supported. Binary input is inferred from content type, not from deployed API Gateway binary-media configuration.
-- Local CORS uses wildcard origins without credentials. Credentialed browser requests are not supported by this default policy.
+- Local CORS automatically allows any request origin with credentials (including browser `fetch` with `credentials: "include"`), requested headers, and supported HTTP methods. Preflight requests are handled locally. This permissive development policy overrides handler CORS headers, exposes returned custom headers, and varies responses by origin and requested headers. Requests without an origin receive `*` without credentials. It does not emulate deployed API Gateway CORS restrictions.
 - CloudFormation support is partial. Supported `Ref`, `Fn::GetAtt`, and `Fn::Sub` values are resolved locally; unsupported environment intrinsic objects produce explicit errors. Resource identifiers may be mocks, not deployed identifiers.
 - `--no-ssm` disables FreeSLS SSM queries, not AWS calls made by your handlers. Environment values are masked by default, including values beginning with `mock-`.
 

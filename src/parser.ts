@@ -20,12 +20,37 @@ const cloudFormationTags = [
   "!Select",
   "!Split",
   "!ImportValue",
+  "!If",
+  "!Equals",
+  "!And",
+  "!Or",
+  "!Not",
+  "!Condition",
+  "!FindInMap",
+  "!Base64",
+  "!GetAZs",
+  "!Cidr",
 ];
 
 const customTags: (ScalarTag | CollectionTag)[] = cloudFormationTags.flatMap(tag => {
   const key = tag === "!Ref" ? "Ref" : `Fn::${tag.slice(1)}`;
   const tags: (ScalarTag | CollectionTag)[] = [{ tag, resolve: value => ({ [key]: value }) }];
-  if (["!Sub", "!GetAtt", "!Join", "!Select", "!Split"].includes(tag)) {
+  if (
+    [
+      "!Sub",
+      "!GetAtt",
+      "!Join",
+      "!Select",
+      "!Split",
+      "!If",
+      "!Equals",
+      "!And",
+      "!Or",
+      "!Not",
+      "!FindInMap",
+      "!Cidr",
+    ].includes(tag)
+  ) {
     tags.push({ tag, collection: "seq", resolve: value => ({ [key]: value.toJSON() }) });
   }
   return tags;
@@ -54,6 +79,14 @@ export function resolveEnvironmentVariables(
 
   for (const [variableKey, variableValue] of Object.entries(environmentVariables)) {
     if (variableValue !== null && typeof variableValue === "object") {
+      const objectKeys = Object.keys(variableValue as object);
+      const isResourceRef =
+        objectKeys.length === 1 && (objectKeys[0] === "Ref" || objectKeys[0] === "Fn::GetAtt");
+      if (isResourceRef) {
+        // FreeSLS only serves HTTP Lambdas; safely ignore unsupported resource references.
+        resolvedEnvironment[variableKey] = "";
+        continue;
+      }
       throw new Error(`Unsupported intrinsic or object in environment variable ${variableKey}`);
     }
     resolvedEnvironment[variableKey] = context

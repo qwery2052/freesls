@@ -102,4 +102,5 @@ export interface ServerOptions {
   stage?: string;
   region?: string;
   basePath?: string;
+  debug?: boolean;
 }
