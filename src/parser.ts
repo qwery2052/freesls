@@ -2,7 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { parse, type ScalarTag, type CollectionTag } from "yaml";
 import pc from "picocolors";
-import type { ServerlessConfig, RouteDefinition, LoadResult } from "./types.js";
+import {
+  type ServerlessConfig,
+  type RouteDefinition,
+  type LoadResult,
+  DEFAULT_OFFLINE_ENV,
+} from "./types.js";
 import { SSMResolver } from "./ssm.js";
 import {
   extractSSMPaths,
@@ -244,6 +249,8 @@ export async function loadServerlessConfig(
   workingDirectory = process.cwd(),
   options: ParserOptions,
 ): Promise<LoadResult> {
+  Object.assign(process.env, DEFAULT_OFFLINE_ENV);
+
   const serverlessYamlPath = path.resolve(workingDirectory, "serverless.yml");
   if (!fs.existsSync(serverlessYamlPath)) {
     throw new Error(`No serverless.yml found in ${workingDirectory}`);
@@ -286,8 +293,11 @@ export async function loadServerlessConfig(
     resolveVariables(text, context, true),
   ) as ServerlessConfig;
 
-  // Export provider environment variables.
-  const globalEnvironment = resolveEnvironmentVariables(finalConfig.provider?.environment);
+  // Export provider environment variables with default local offline flags.
+  const globalEnvironment = {
+    ...DEFAULT_OFFLINE_ENV,
+    ...resolveEnvironmentVariables(finalConfig.provider?.environment),
+  };
   Object.assign(process.env, globalEnvironment);
 
   const routeDefinitions = extractRoutes(

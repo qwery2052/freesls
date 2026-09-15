@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { ServerlessConfig, RouteDefinition, LoadResult } from "./types.js";
+import {
+  type ServerlessConfig,
+  type RouteDefinition,
+  type LoadResult,
+  DEFAULT_OFFLINE_ENV,
+} from "./types.js";
 import { parseYaml, resolveSSMValues, type ParserOptions } from "./parser.js";
 import { extractSSMPaths, resolveScalarData } from "./resolver.js";
 
@@ -545,6 +550,8 @@ export async function loadSamConfig(
   workingDirectory = process.cwd(),
   options: ParserOptions,
 ): Promise<LoadResult> {
+  Object.assign(process.env, DEFAULT_OFFLINE_ENV);
+
   const templatePath = findSamTemplatePath(workingDirectory);
   const rawYamlContent = fs.readFileSync(templatePath, "utf-8");
   const initialConfig = parseYaml<SamTemplate>(rawYamlContent);
@@ -588,9 +595,12 @@ export async function loadSamConfig(
     true,
   ) as SamTemplate;
 
-  // Export global function environment variables.
+  // Export global function environment variables with default local offline flags.
   const globalSamEnv = finalConfig.Globals?.Function?.Environment?.Variables;
-  const globalEnvironment = resolveSamEnvironmentMap(globalSamEnv);
+  const globalEnvironment = {
+    ...DEFAULT_OFFLINE_ENV,
+    ...resolveSamEnvironmentMap(globalSamEnv),
+  };
   Object.assign(process.env, globalEnvironment);
 
   // Extract function routes.

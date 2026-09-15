@@ -12,6 +12,7 @@ import {
 } from "./printer.js";
 import { startServer } from "./server.js";
 import { SSMParameterNotFoundError } from "./ssm.js";
+import { DEFAULT_OFFLINE_ENV } from "./types.js";
 
 const program = new Command();
 
@@ -37,7 +38,7 @@ function parseCliParameters(parameterEntries?: string[]): Record<string, string>
 program
   .name("freesls")
   .description("Offline API Gateway & Lambda Runner (Serverless Framework & AWS SAM)")
-  .version("0.3.6", "-v, --version", "Output the current version number")
+  .version("0.3.7", "-v, --version", "Output the current version number")
   .option("-s, --stage <stage>", "Deployment stage", "develop")
   .option("-r, --region <region>", "AWS region", "us-east-1")
   .option("-p, --port <port>", "Local HTTP server port", "4000")
@@ -66,6 +67,8 @@ program
       }
 
       const basePath = (commandOptions.basePath || commandOptions.prefix || "").trim();
+
+      Object.assign(process.env, DEFAULT_OFFLINE_ENV);
 
       if (commandOptions.profile) {
         process.env.AWS_PROFILE = commandOptions.profile;
