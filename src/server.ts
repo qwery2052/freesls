@@ -5,12 +5,13 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import pc from "picocolors";
 import { createJiti, type ModuleCache } from "jiti";
-import type {
-  RouteDefinition,
-  APIGatewayProxyEvent,
-  APIGatewayProxyEventV2,
-  LambdaContext,
-  ServerOptions,
+import {
+  type RouteDefinition,
+  type APIGatewayProxyEvent,
+  type APIGatewayProxyEventV2,
+  type LambdaContext,
+  type ServerOptions,
+  DEFAULT_OFFLINE_ENV,
 } from "./types.js";
 import { formatMethod, logDebug, printDebugHeaders } from "./printer.js";
 import { createTypeScriptTransform } from "./typescript-transform.js";
@@ -169,6 +170,12 @@ function withTemporaryEnvironment<ExecutionResult>(
 ): Promise<ExecutionResult> {
   const execution = invocationQueue.then(async () => {
     const originalEnvironmentBackup = { ...process.env };
+
+    for (const [envKey, envValue] of Object.entries(DEFAULT_OFFLINE_ENV)) {
+      if (process.env[envKey] === undefined) {
+        process.env[envKey] = envValue;
+      }
+    }
 
     for (const [envKey, envValue] of Object.entries(targetEnvironment)) {
       process.env[envKey] = envValue;

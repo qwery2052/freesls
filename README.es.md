@@ -17,7 +17,7 @@
 </p>
 
 ```
-   /\_/\   FreeSLS v0.3.6  [SLS] / [AWS SAM]
+   /\_/\   FreeSLS v0.3.7  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
    > ^ <   ● Service: user-management-api [stage: dev]
 ────────────────────────────────────────────────────────────
@@ -43,6 +43,7 @@ Las herramientas tradicionales de emulación local para Serverless Framework y A
 - **Soporte Dual de Frameworks**: Ejecuta proyectos de **Serverless Framework** (`serverless.yml`) y **AWS SAM** (`template.yaml` / `template.yml`) con la misma herramienta.
 - **Cero configuración de compilación**: Ejecuta archivos TypeScript (`.ts`, `.tsx`) y JavaScript (`.js`, `.mjs`, `.cjs`) directamente usando [jiti](https://github.com/unjs/jiti) con source maps integrados.
 - **Resolución real de AWS SSM o Mocks locales**: Consulta parámetros reales de AWS Parameter Store respetando tus perfiles de AWS SSO/CLI, o ejecuta offline con `--no-ssm` usando `ssm.env`, fallbacks o mocks automáticos.
+- **Variable de entorno offline**: Inyecta automáticamente `IS_LOCAL=true` en `process.env` y en el contexto de ejecución de las funciones, permitiendo agregar condiciones locales en tu código fácilmente.
 - **Inyección de parámetros**: Parámetros pasados vía `--param clave=valor` se inyectan automáticamente en `process.env`.
 - **Resolución avanzada de variables**: Soporta sintaxis como `${self:...}`, `${opt:...}`, `${env:...}`, `${param:...}`, `${aws:...}`, pseudo-parámetros CloudFormation (`${AWS::Region}`, `${AWS::AccountId}`) y cadenas de fallback (`${ssm:/path, env:VAR, 'fallback'}`).
 - **Depuración instantánea**: Coloca breakpoints en tus funciones Lambda y depúralos en VS Code sin pasos de build intermedios.

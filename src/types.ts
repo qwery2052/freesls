@@ -104,3 +104,7 @@ export interface ServerOptions {
   basePath?: string;
   debug?: boolean;
 }
+
+export const DEFAULT_OFFLINE_ENV: Record<string, string> = Object.freeze({
+  IS_LOCAL: "true",
+});

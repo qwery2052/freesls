@@ -161,6 +161,7 @@ test("SAM nested dynamic paths use offline mocks and fall back only after interp
   });
   const result = await loadSamConfig(directory, options);
   assert.deepEqual(result.routes[0].environment, {
+    IS_LOCAL: "true",
     FOUND: "offline-${Stage}",
     MISSING: "mock-missing",
     SUB: "offline-${Stage}",
@@ -445,5 +446,57 @@ functions:
   assert.equal(result.routes[0].environment.PLAIN_VAR, "simple-value");
   assert.equal(result.routes[0].environment.QUEUE_URL, "");
   assert.equal(result.routes[0].environment.QUEUE_ARN, "");
+});
+
+test("Serverless config automatically injects IS_LOCAL environment variable", async t => {
+  const directory = await fixture(t, {
+    "serverless.yml": `
+service: offline-env-test
+provider:
+  name: aws
+  environment:
+    CUSTOM_FLAG: \${env:IS_LOCAL}
+functions:
+  testFunction:
+    handler: handler.test
+    events:
+      - http:
+          path: /offline-test
+          method: get
+`,
+  });
+
+  const result = await loadServerlessConfig(directory, options);
+  assert.equal(result.globalEnv.IS_LOCAL, "true");
+  assert.equal(result.globalEnv.CUSTOM_FLAG, "true");
+
+  assert.equal(result.routes[0].environment.IS_LOCAL, "true");
+  assert.equal(result.routes[0].environment.CUSTOM_FLAG, "true");
+});
+
+test("SAM config automatically injects IS_LOCAL environment variable", async t => {
+  const directory = await fixture(t, {
+    "template.yaml": `
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: offline-sam-env-test
+Resources:
+  TestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handler.test
+      Runtime: nodejs20.x
+      Events:
+        ApiEvent:
+          Type: Api
+          Properties:
+            Path: /offline-sam
+            Method: GET
+`,
+  });
+
+  const result = await loadSamConfig(directory, options);
+  assert.equal(result.globalEnv.IS_LOCAL, "true");
+  assert.equal(result.routes[0].environment.IS_LOCAL, "true");
 });
 

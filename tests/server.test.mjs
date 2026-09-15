@@ -769,3 +769,33 @@ test(
     }
   },
 );
+
+test("server exposes IS_LOCAL inside lambda handlers", async t => {
+  const { request } = await fixture(
+    t,
+    {
+      "handler.ts": `
+        export async function checkOffline() {
+          return {
+            statusCode: 200,
+            body: JSON.stringify({
+              isLocalEnv: process.env.IS_LOCAL,
+            }),
+          };
+        }
+      `,
+    },
+    [
+      {
+        path: "/check-local-env",
+        handler: "handler.checkOffline",
+        environment: {},
+      },
+    ],
+  );
+
+  const res = await request("/check-local-env");
+  assert.equal(res.status, 200);
+  const data = res.json();
+  assert.equal(data.isLocalEnv, "true");
+});

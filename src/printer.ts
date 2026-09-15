@@ -33,9 +33,9 @@ export function printBanner(
   const debugBadge = debug ? `  ${pc.bold(pc.bgGreen(pc.black(" DEBUG ")))}` : "";
 
   const bannerArt = `
-   ${pc.magenta("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.3.6")}  ${frameworkBadge}${debugBadge}
-  ${pc.magenta("( o.o )")}  ${pc.dim("Offline API Gateway & Lambda Runner")}
-   ${pc.magenta("> ^ <")}   ${pc.green("●")} Service: ${pc.bold(serviceName)} ${pc.dim(`[stage: ${stage}]`)}
+   ${pc.magenta("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.3.7")}  ${frameworkBadge}${debugBadge}
+   ${pc.magenta("( o.o )")}  ${pc.dim("Offline API Gateway & Lambda Runner")}
+    ${pc.magenta("> ^ <")}   ${pc.green("●")} Service: ${pc.bold(serviceName)} ${pc.dim(`[stage: ${stage}]`)}
   `;
 
   console.log(bannerArt);
@@ -85,6 +85,7 @@ export function printDebugHeaders(headers: Record<string, string>, requestId?: s
 
 function maskSensitiveValue(valueToMask: string): string {
   if (!valueToMask) return "";
+  if (valueToMask === "true" || valueToMask === "false") return valueToMask;
   if (valueToMask.length <= 4) return "*".repeat(valueToMask.length);
   if (valueToMask.length <= 8) return `${valueToMask.slice(0, 2)}...${valueToMask.slice(-2)}`;
   return `${valueToMask.slice(0, 4)}...${valueToMask.slice(-4)}`;

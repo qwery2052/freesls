@@ -17,7 +17,7 @@
 </p>
 
 ```
-   /\_/\   FreeSLS v0.3.6  [SLS] / [AWS SAM]
+   /\_/\   FreeSLS v0.3.7  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
    > ^ <   ● Service: user-management-api [stage: dev]
 ────────────────────────────────────────────────────────────
@@ -46,6 +46,7 @@ Traditional local emulation tools for Serverless Framework and AWS SAM often req
   TypeScript handlers use the TypeScript compiler for fields and decorators, then Jiti for module loading and path aliases. The nearest `tsconfig.json` (including `extends`) supplies target, class-field, decorator, and JSX options. Legacy decorators and decorator metadata default to enabled when unspecified, matching Jiti's previous defaults. Applications must load their own metadata runtime (such as `reflect-metadata`) before decorated classes. Loading transpiles individual files without type-checking; metadata requiring cross-file type inference is not available. Build output and module settings do not override Jiti's loader. Restart after changing path aliases.
 
 - **Real AWS SSM Resolution or Local Mocks**: Fetch real parameters from AWS Parameter Store using your AWS SSO/CLI profiles, or run completely offline with `--no-ssm` using `ssm.env`, fallbacks, or automatic mocks.
+- **Offline Environment Flag**: Automatically injects `IS_LOCAL=true` into `process.env` and function runtimes, making it simple to write conditional local logic.
 - **CLI Parameter Injection**: Custom arguments passed via `--param key=value` are automatically exported to `process.env`.
 - **Advanced Variable Resolution**: Native support for `${self:...}`, `${opt:...}`, `${env:...}`, `${param:...}`, `${aws:...}`, CloudFormation pseudo parameters (`${AWS::Region}`, `${AWS::AccountId}`), and fallback chains (`${ssm:/path, env:VAR, 'fallback'}`).
 - **Instant Debugging**: Set breakpoints in your Lambda handler code and debug directly in VS Code without intermediate build steps.
