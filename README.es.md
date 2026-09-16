@@ -287,20 +287,52 @@ freesls -s dev --debug
 
 ---
 
-## Scheduler local y referencias CloudFormation
+## Scheduler local
 
-FreeSLS 0.4 requiere **Node.js 20+**, acorde con el SDK de AWS. `--scheduler` activa un endpoint de EventBridge **Scheduler** en memoria, en un puerto loopback asignado automáticamente e independiente del puerto y prefijo HTTP. No implementa el bus de eventos EventBridge (`PutEvents`).
+`--scheduler` emula EventBridge **Scheduler** para schedules puntuales `at(...)`. No emula el bus de eventos (`PutEvents`) ni las reglas `schedule: cron(...)`.
 
-### Llamar a Scheduler desde un handler
+**Operaciones:** `CreateSchedule`, `GetSchedule`, `DeleteSchedule` (solo grupo `default`). `UpdateSchedule` **no** está soportado.
 
-FreeSLS inyecta `AWS_ENDPOINT_URL_SCHEDULER` en el entorno **antes de cargar los módulos**. Usa un cliente AWS SDK v3 compatible con endpoints por servicio mediante variables de entorno (probado con `@aws-sdk/client-scheduler@3.1133.0`):
+### Cómo funciona, paso a paso
+
+1. FreeSLS registra cada función y le calcula un **ARN simulado**: `arn:<partición>:lambda:<región>:<cuenta>:function:<nombre>`, donde `<cuenta>` es `123456789012` y `<nombre>` es `name` o `${service}-${stage}-${key}`. Ejemplo: `arn:aws:lambda:us-east-1:123456789012:function:example-service-dev-example-function`.
+2. Con `--scheduler`, levanta un servidor Scheduler local (loopback, puerto aleatorio) e inyecta `AWS_ENDPOINT_URL_SCHEDULER` **antes de cargar tus módulos**.
+3. Tu handler llama `CreateSchedule` con `Target.Arn` = ese ARN simulado (normalmente desde una variable de entorno con `!Sub`/`!GetAtt`).
+4. FreeSLS busca ese ARN en su registro y exige coincidencia exacta; si no, rechaza el destino.
+5. A la hora indicada invoca la Lambda **local** con el `Input` (JSON). Nada sale a AWS.
+6. `GetSchedule`/`DeleteSchedule` leen o eliminan el schedule en memoria.
+
+> El ARN exacto aparece bajo cada endpoint como `└─ arn: ...`. Copia ese valor para `Target.Arn`.
+
+### Ejemplo de principio a fin
+
+`serverless.yml`:
+
+```yaml
+service: example-service
+provider:
+  environment:
+    TARGET_ARN: !GetAtt ExampleDashfunctionLambdaFunction.Arn
+    SCHEDULER_ROLE_ARN: !GetAtt ExampleRole.Arn
+resources:
+  Resources:
+    ExampleRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: example-scheduler
+functions:
+  example-function:
+    handler: src/handler.example
+```
+
+Handler:
 
 ```ts
 const scheduler = new SchedulerClient({ region: "us-east-1" });
 await scheduler.send(
   new CreateScheduleCommand({
     Name: "example-job",
-    ScheduleExpression: "at(2030-01-01T10:00:00)", // choose a future date
+    ScheduleExpression: "at(2030-01-01T10:00:00)",
     ScheduleExpressionTimezone: "America/Bogota",
     FlexibleTimeWindow: { Mode: "OFF" },
     ActionAfterCompletion: "DELETE",
@@ -308,13 +340,43 @@ await scheduler.send(
       Arn: process.env.TARGET_ARN,
       RoleArn: process.env.SCHEDULER_ROLE_ARN,
       Input: JSON.stringify({ example: true }),
-      RetryPolicy: { MaximumRetryAttempts: 2, MaximumEventAgeInSeconds: 3600 },
     },
   }),
 );
 ```
 
-Un `endpoint` explícito en el cliente tiene prioridad; `AWS_IGNORE_CONFIGURED_ENDPOINT_URLS=true` desactiva la configuración por entorno. Para clientes antiguos, configura `endpoint: process.env.AWS_ENDPOINT_URL_SCHEDULER` explícitamente o actualiza el SDK. El SDK necesita credenciales de firma. Se preservan los perfiles y credenciales existentes. En una aplicación exclusivamente local, configura credenciales ficticias en el cliente local o en la terminal (`AWS_ACCESS_KEY_ID=local`, `AWS_SECRET_ACCESS_KEY=local`). No reemplaces credenciales reales si la aplicación también consulta AWS. El endpoint local no valida permisos IAM ni firmas.
+Ejecuta y observa la consola:
+
+```bash
+freesls -s dev -p 3000 --scheduler --no-ssm
+```
+
+```text
+Local Scheduler: http://127.0.0.1:50000 (at schedules, in-memory)…
+
+🐾 [Scheduler] Schedule received example-job
+   ├─ target: example-function
+   │  arn:    arn:aws:lambda:us-east-1:123456789012:function:example-service-dev-example-function
+   ├─ fires:  2030-01-01T15:00:00.000Z (America/Bogota) · in 3m 12s
+   └─ actions: ENABLED · after run DELETE · retries 185 · max age 86400s
+
+😻 [Scheduler] Firing example-job → example-function
+😸 [Lambda][start] example-function
+…
+😻 [Scheduler] Delivered example-job · schedule processed
+```
+
+### Credenciales
+
+El SDK de Scheduler firma cada petición, así que necesita credenciales de AWS. Si usas SSO, ejecuta `aws sso login --profile <perfil>` y listo; FreeSLS preserva tus credenciales existentes. En una app exclusivamente local sin credenciales, pon unas ficticias (`AWS_ACCESS_KEY_ID=local`, `AWS_SECRET_ACCESS_KEY=local`).
+
+### Solución de problemas
+
+- `403 AccessDeniedException: Cross-account pass role is not allowed` → la llamada llegó a **AWS real**, no al endpoint local. Arranca con `--scheduler` y usa un `@aws-sdk/client-scheduler` que respete `AWS_ENDPOINT_URL_SCHEDULER`, o define `endpoint: process.env.AWS_ENDPOINT_URL_SCHEDULER` explícitamente.
+- `Target.Arn must exactly identify a Lambda registered in this project` → el ARN no coincide con ninguna función local; revisa el `name` o `${service}-${stage}-${key}`.
+- `Local one-time schedules must be in the future` → el instante resuelto ya pasó; revisa la fecha y `ScheduleExpressionTimezone`.
+
+### Límites
 
 | Soportado    | Contrato                                                                                                                         |
 | ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
@@ -335,7 +397,7 @@ FreeSLS imprime una línea `[Lambda][start] <functionName>` (verde) en stdout pa
 
 ### Resolver referencias a recursos
 
-En Serverless, `Ref`, `Fn::GetAtt` y `Fn::Sub` del entorno soportan identidades Lambda registradas y roles IAM declarados localmente. Ejemplo:
+FreeSLS resuelve `Ref`, `Fn::GetAtt` y `Fn::Sub` en local: Lambdas registradas y roles IAM declarados en tu plantilla. Ejemplo:
 
 ```yaml
 provider:
@@ -347,17 +409,27 @@ resources:
     ExampleRole:
       Type: AWS::IAM::Role
       Properties:
-        RoleName: local-scheduler
+        RoleName: example-scheduler
 functions:
   example-function:
-    handler: src/handler.run
+    handler: src/handler.example
 ```
 
-Los IDs lógicos generados de Serverless convierten `-` en `Dash` y `_` en `Underscore`, ponen la primera letra en mayúscula y añaden `LambdaFunction`. El nombre utiliza `name` explícito o `${service}-${stage}-${key}`. SAM utiliza `FunctionName` o `${service}-${logicalId}`, admite handlers sin HTTP y `CodeUri`. Los ARN locales Lambda/IAM consideran las particiones comercial, China y GovCloud; la cuenta predeterminada es `123456789012`. Los nombres y paths de roles IAM locales deben ser cadenas escalares. No se despliegan recursos.
+Los IDs lógicos generados de Serverless convierten `-` en `Dash` y `_` en `Underscore`, ponen la primera letra en mayúscula y añaden `LambdaFunction`. El nombre utiliza `name` o `${service}-${stage}-${key}`. SAM utiliza `FunctionName` o `${service}-${logicalId}`. Los ARN locales usan `--region`, la cuenta simulada `123456789012` y la partición correspondiente (`aws`, `aws-cn`, `aws-us-gov`); nunca consultan AWS. No se despliegan recursos.
 
-Las referencias se resuelven localmente siempre que sea posible: Lambdas registradas y roles IAM declarados en tu plantilla. Para lo que FreeSLS no pueda derivar localmente (por ejemplo un rol definido en otro stack), pásalo explícitamente con `--cf-value LogicalId.Atributo=valor` o `--cf-value Outputs.OutputKey=valor`. Un identificador físico **no** es un atributo GetAtt, así que incluye el path real del rol al sobrescribir un ARN. `--cf-value` nunca consulta AWS.
+#### Cuando una referencia no se puede resolver: `--cf-value`
 
-Los valores explícitos de `--cf-value` tienen prioridad sobre consultas y valores locales. Las Lambdas del proyecto siempre se ejecutan localmente. El modo HTTP tradicional de Serverless conserva referencias directas Ref/GetAtt no soportadas como cadenas vacías por compatibilidad; `--scheduler` o `--cf-value` activan errores estrictos. Los mappings Sub no soportados siempre fallan explícitamente. El contenido SSM es un dato terminal, no otra expresión de configuración. SAM sigue siendo experimental para los demás tipos de recursos CloudFormation.
+Si una referencia apunta a algo **no** declarado en tu plantilla (por ejemplo un rol de otro stack), FreeSLS se detiene con un error accionable. Da el valor a mano:
+
+```bash
+freesls --scheduler --no-ssm --cf-value ExampleRole.Arn=arn:aws:iam::123456789012:role/example-scheduler
+```
+
+- `LogicalId.Atributo=valor` para `!GetAtt` (incluye el path real del rol al sobrescribir un ARN).
+- `Outputs.OutputKey=valor` para outputs de stack.
+- Repetible, tiene prioridad sobre la resolución local y **nunca consulta AWS**. Aplica a `!Ref`/`!GetAtt`, no a cadenas `!Sub`.
+
+`--scheduler` o `--cf-value` también hacen que `Ref`/`GetAtt` no resueltos sean errores estrictos; sin ellos, el modo HTTP tradicional de Serverless conserva valores vacíos por compatibilidad. Los mappings `Fn::Sub` no soportados siempre fallan explícitamente.
 
 ## 🔒 Modo Offline y Mocks de SSM (`--no-ssm`)
 
