@@ -14,12 +14,13 @@ const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 test("CLI rejects invalid parameters and ports without printing parameter values", () => {
   for (const args of [
     ["--param", "private-invalid-value"],
+    ["--cf-value", "private-invalid-value"],
     ["--port", "4000oops"],
     ["--port", "65536"],
   ]) {
     const result = spawnSync(process.execPath, [cliPath, ...args], { encoding: "utf8" });
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /Invalid --(?:param|port)/);
+    assert.match(result.stderr, /Invalid --(?:param|port|cf-value)/);
     assert.doesNotMatch(result.stderr, /private-invalid-value/);
   }
 });
@@ -28,7 +29,7 @@ test("CLI outputs version with -v, -V, and --version", () => {
   for (const flag of ["-v", "-V", "--version"]) {
     const result = spawnSync(process.execPath, [cliPath, flag], { encoding: "utf8" });
     assert.equal(result.status, 0);
-    assert.match(result.stdout.trim(), /^\d+\.\d+\.\d+$/);
+    assert.match(result.stdout.trim(), /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
   }
 });
 

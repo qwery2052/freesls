@@ -33,7 +33,7 @@ export function printBanner(
   const debugBadge = debug ? `  ${pc.bold(pc.bgGreen(pc.black(" DEBUG ")))}` : "";
 
   const bannerArt = `
-   ${pc.magenta("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.3.7")}  ${frameworkBadge}${debugBadge}
+   ${pc.magenta("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.4.0-beta.0")}  ${frameworkBadge}${debugBadge}
    ${pc.magenta("( o.o )")}  ${pc.dim("Offline API Gateway & Lambda Runner")}
     ${pc.magenta("> ^ <")}   ${pc.green("●")} Service: ${pc.bold(serviceName)} ${pc.dim(`[stage: ${stage}]`)}
   `;

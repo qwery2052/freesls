@@ -500,3 +500,166 @@ Resources:
   assert.equal(result.routes[0].environment.IS_LOCAL, "true");
 });
 
+test("Serverless resolves CloudFormation !Sub and pseudo-parameters in environment variables", async t => {
+  const directory = await fixture(t, {
+    "serverless.yml": `service: test-service
+provider:
+  name: aws
+  environment:
+    GLOBAL_SUB: !Sub "arn:aws:sqs:\${AWS::Region}:\${AWS::AccountId}:my-queue"
+    GLOBAL_REF: !Ref "AWS::Region"
+functions:
+  create-messaging-campaign:
+    handler: handler.test
+    events:
+      - http:
+          path: create-messaging-campaign
+          method: post
+    environment:
+      SEND_PUSH_BROADCAST_LAMBDA_ARN: !Sub arn:aws:lambda:\${AWS::Region}:\${AWS::AccountId}:function:\${self:service}-\${sls:stage}-send-push-broadcast
+      SCHEDULER_ROLE_ARN: !GetAtt EventBridgeSchedulerExecutionRole.Arn
+      SUB_WITH_MAP: !Sub
+        - "arn:aws:sns:\${AWS::Region}:\${AWS::AccountId}:\${TopicName}"
+        - TopicName: "my-topic"
+`,
+  });
+
+  const result = await loadServerlessConfig(directory, options);
+  assert.equal(result.globalEnv.GLOBAL_SUB, "arn:aws:sqs:eu-west-1:123456789012:my-queue");
+  assert.equal(result.globalEnv.GLOBAL_REF, "eu-west-1");
+
+  const routeEnv = result.routes[0].environment;
+  assert.equal(
+    routeEnv.SEND_PUSH_BROADCAST_LAMBDA_ARN,
+    "arn:aws:lambda:eu-west-1:123456789012:function:test-service-local-send-push-broadcast",
+  );
+  assert.equal(routeEnv.SCHEDULER_ROLE_ARN, "");
+  assert.equal(routeEnv.SUB_WITH_MAP, "arn:aws:sns:eu-west-1:123456789012:my-topic");
+});
+
+test("Sub preserves SSM data in mappings and templates and rejects unsupported nested objects", async t => {
+  const directory = await fixture(t, {
+    "ssm.env": "/value=${opt:stage}\n/other=${MissingResource}",
+    "serverless.yml": `service: demo
+provider:
+  environment:
+    MAPPED: !Sub ['prefix-\${Value}', {Value: '\${ssm:/value}'}]
+    DIRECT: !Sub 'prefix-\${ssm:/other}'
+    ESCAPED: !Sub '\${!Name}'
+`,
+  });
+  const loaded = await loadServerlessConfig(directory, options);
+  assert.equal(loaded.globalEnv.MAPPED, "prefix-${opt:stage}");
+  assert.equal(loaded.globalEnv.DIRECT, "prefix-${MissingResource}");
+  assert.equal(loaded.globalEnv.ESCAPED, "${Name}");
+  for (const intrinsic of [
+    { "Fn::Sub": ["prefix-${Value}", { Value: { "Fn::Join": ["-", ["sensitive-value", "b"]] } }] },
+    { "Fn::Sub": "${MissingResource}" },
+  ]) {
+    await writeFile(
+      path.join(directory, "serverless.yml"),
+      JSON.stringify({ service: "demo", provider: { environment: { SECRET: intrinsic } } }),
+    );
+    await assert.rejects(
+      loadServerlessConfig(directory, options),
+      e => /environment variable SECRET/.test(e.message) && !e.message.includes("sensitive-value"),
+    );
+  }
+});
+
+test("Scheduler mode resolves local roles with paths, partition-aware functions and rejects unknown resources", async t => {
+  const config = {
+    service: "demo",
+    provider: {
+      environment: {
+        ROLE: { "Fn::GetAtt": "Role.Arn" },
+        TARGET: { "Fn::GetAtt": "TargetLambdaFunction.Arn" },
+      },
+    },
+    resources: {
+      Resources: {
+        Role: { Type: "AWS::IAM::Role", Properties: { RoleName: "scheduler", Path: "/team/" } },
+      },
+    },
+    functions: { target: { name: "custom-target", handler: "index.handler" } },
+  };
+  const directory = await fixture(t, { "serverless.yml": JSON.stringify(config) });
+  const loaded = await loadServerlessConfig(directory, {
+    ...options,
+    region: "cn-north-1",
+    scheduler: true,
+  });
+  assert.equal(loaded.globalEnv.ROLE, "arn:aws-cn:iam::123456789012:role/team/scheduler");
+  assert.equal(loaded.globalEnv.TARGET, loaded.functions[0].arn);
+  assert.equal(
+    loaded.functions[0].arn,
+    "arn:aws-cn:lambda:cn-north-1:123456789012:function:custom-target",
+  );
+  config.provider.environment.ROLE = { "Fn::GetAtt": "Unknown.Arn" };
+  await writeFile(path.join(directory, "serverless.yml"), JSON.stringify(config));
+  await assert.rejects(
+    loadServerlessConfig(directory, { ...options, scheduler: true }),
+    /--cf-value/,
+  );
+  const overridden = await loadServerlessConfig(directory, {
+    ...options,
+    scheduler: true,
+    cfValues: { "Unknown.Arn": "explicit" },
+  });
+  assert.equal(overridden.globalEnv.ROLE, "explicit");
+});
+
+test("SAM registers non-HTTP targets and resolves their exact ARNs", async t => {
+  const directory = await fixture(t, {
+    "template.yaml": `Description: demo
+Globals:
+  Function:
+    Environment:
+      Variables:
+        TARGET: !GetAtt Target.Arn
+Resources:
+  Target:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: custom-target
+      CodeUri: src
+      Handler: handler.run
+`,
+  });
+  const loaded = await loadSamConfig(directory, { ...options, scheduler: true });
+  assert.equal(loaded.routes.length, 0);
+  assert.equal(loaded.functions[0].handler, "src/handler.run");
+  assert.equal(loaded.globalEnv.TARGET, loaded.functions[0].arn);
+});
+
+test("local identities use the resolved service and bounded, distinct generated role names", async t => {
+  const service = "a-service-name-long-enough-for-generated-roles";
+  const roleA = "EventBridgeSchedulerExecutionRoleOne";
+  const roleB = "EventBridgeSchedulerExecutionRoleTwo";
+  const directory = await fixture(t, {
+    "serverless.yml": JSON.stringify({
+      service: "${param:serviceName}",
+      provider: {
+        environment: {
+          ROLE_A: { "Fn::GetAtt": `${roleA}.Arn` },
+          ROLE_B: { "Fn::GetAtt": `${roleB}.Arn` },
+        },
+      },
+      resources: {
+        Resources: { [roleA]: { Type: "AWS::IAM::Role" }, [roleB]: { Type: "AWS::IAM::Role" } },
+      },
+      functions: { target: { handler: "index.handler" } },
+    }),
+  });
+  const loaded = await loadServerlessConfig(directory, {
+    ...options,
+    scheduler: true,
+    params: { serviceName: service },
+  });
+  assert.equal(
+    loaded.functions[0].arn,
+    `arn:aws:lambda:eu-west-1:123456789012:function:${service}-local-target`,
+  );
+  assert.notEqual(loaded.globalEnv.ROLE_A, loaded.globalEnv.ROLE_B);
+  assert.equal(loaded.globalEnv.ROLE_A.split("/").at(-1).length, 64);
+});

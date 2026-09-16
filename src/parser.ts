@@ -6,6 +6,7 @@ import {
   type ServerlessConfig,
   type RouteDefinition,
   type LoadResult,
+  type FunctionDefinition,
   DEFAULT_OFFLINE_ENV,
 } from "./types.js";
 import { SSMResolver } from "./ssm.js";
@@ -14,8 +15,13 @@ import {
   getNestedValue,
   resolveVariables,
   resolveScalarData,
+  resolveIntrinsicReference,
+  resolveCloudFormationSub,
+  awsPartition,
+  localRoleName,
   type ResolveContext,
 } from "./resolver.js";
+import { loadStackReferences } from "./cloudformation.js";
 
 const cloudFormationTags = [
   "!Ref",
@@ -69,6 +75,9 @@ export interface ParserOptions {
   region: string;
   params: Record<string, string>;
   resolveSSM?: boolean;
+  scheduler?: boolean;
+  cfStack?: string;
+  cfValues?: Record<string, string>;
 }
 
 /**
@@ -85,18 +94,31 @@ export function resolveEnvironmentVariables(
   for (const [variableKey, variableValue] of Object.entries(environmentVariables)) {
     if (variableValue !== null && typeof variableValue === "object") {
       const objectKeys = Object.keys(variableValue as object);
-      const isResourceRef =
-        objectKeys.length === 1 && (objectKeys[0] === "Ref" || objectKeys[0] === "Fn::GetAtt");
-      if (isResourceRef) {
-        // FreeSLS only serves HTTP Lambdas; safely ignore unsupported resource references.
-        resolvedEnvironment[variableKey] = "";
-        continue;
+      if (objectKeys.length === 1 && (objectKeys[0] === "Ref" || objectKeys[0] === "Fn::GetAtt")) {
+        const resolved = resolveIntrinsicReference(variableValue, context);
+        // Preserve the legacy HTTP-only mode's blank resource references.
+        if (resolved !== null || !context?.strictReferences) {
+          resolvedEnvironment[variableKey] = resolved ?? "";
+          continue;
+        }
       }
-      throw new Error(`Unsupported intrinsic or object in environment variable ${variableKey}`);
+      if (objectKeys.length === 1 && objectKeys[0] === "Fn::Sub") {
+        const subResult = resolveCloudFormationSub(
+          (variableValue as Record<string, unknown>)["Fn::Sub"],
+          context,
+        );
+        if (subResult !== null) {
+          resolvedEnvironment[variableKey] = subResult;
+          continue;
+        }
+      }
+      throw new Error(
+        `Unsupported intrinsic or object in environment variable ${variableKey}. Use supported Ref/GetAtt/Sub values, declare a local Lambda or IAM role, or supply --cf-value LogicalId.Attribute=value (stack outputs: Outputs.OutputKey). --cf-stack enables read-only stack lookup.`,
+      );
     }
     resolvedEnvironment[variableKey] = context
-      ? resolveVariables(String(variableValue), context, true)
-      : String(variableValue);
+      ? resolveVariables(String(variableValue ?? ""), context, true)
+      : String(variableValue ?? "");
   }
   return resolvedEnvironment;
 }
@@ -201,17 +223,31 @@ function extractRoutes(
   functionsConfig: Record<string, any> = {},
   globalEnvironment: Record<string, string>,
   httpApiPayload: unknown = "2.0",
+  context?: ResolveContext,
+  functions: FunctionDefinition[] = [],
+  rawFunctions: Record<string, any> = functionsConfig,
 ): RouteDefinition[] {
   const routeDefinitions: RouteDefinition[] = [];
 
   for (const [functionName, functionConfig] of Object.entries(functionsConfig)) {
-    if (!Array.isArray(functionConfig?.events)) continue;
+    if (typeof functionConfig?.handler !== "string" || !functionConfig.handler.trim()) {
+      throw new Error(`Invalid handler for function ${functionName}; expected a non-empty string`);
+    }
 
     const functionEnvironment = resolveEnvironmentVariables(
-      functionConfig.environment,
-      undefined,
+      rawFunctions[functionName]?.environment,
+      context,
       globalEnvironment,
     );
+
+    const definition = {
+      functionName,
+      handler: functionConfig.handler,
+      environment: functionEnvironment,
+      arn: context?.references?.get(`functions.${functionName}.Arn`),
+    };
+    functions.push(definition);
+    if (!Array.isArray(functionConfig?.events)) continue;
 
     for (const eventConfig of functionConfig.events) {
       const parsedHttp = parseHttpEvent(eventConfig?.http ?? eventConfig?.httpApi);
@@ -232,6 +268,7 @@ function extractRoutes(
       }
 
       routeDefinitions.push({
+        ...definition,
         functionName,
         method: parsedHttp.method,
         path: parsedHttp.path,
@@ -270,6 +307,10 @@ export async function loadServerlessConfig(
     serviceName,
     params: options.params,
     rawConfig: initialConfig,
+    references: options.cfStack
+      ? await loadStackReferences(options.cfStack, options.region)
+      : new Map(),
+    strictReferences: Boolean(options.scheduler || options.cfStack || options.cfValues),
   };
 
   // Discover SSM references in resolved scalar data, never in rewritten YAML.
@@ -293,22 +334,88 @@ export async function loadServerlessConfig(
     resolveVariables(text, context, true),
   ) as ServerlessConfig;
 
+  const resolvedServiceName = resolveVariables(serviceName, context, true);
+  context.serviceName = resolvedServiceName;
+  const references = context.references!;
+  const partition = awsPartition(options.region);
+  const prefix = `arn:${partition}:lambda:${options.region}:${references.get("AWS::AccountId") || "123456789012"}:function:`;
+  const names = new Set<string>();
+  const logicalIds = new Set<string>();
+  const functionLogicalIds = new Map<string, string>();
+  for (const [key, fn] of Object.entries(finalConfig.functions || {})) {
+    const name =
+      (fn as { name?: unknown }).name ?? `${resolvedServiceName}-${options.stage}-${key}`;
+    if (typeof name !== "string" || !/^[\w-]{1,64}$/.test(name) || names.has(name))
+      throw new Error(
+        `Invalid or duplicate Lambda name for function ${key}. Use a unique name of 1-64 letters, digits, underscores or hyphens.`,
+      );
+    names.add(name);
+    const arn = prefix + name;
+    // Serverless Framework's generated logical function ID convention.
+    const logical =
+      key.charAt(0).toUpperCase() +
+      key.slice(1).replace(/-/g, "Dash").replace(/_/g, "Underscore") +
+      "LambdaFunction";
+    if (logicalIds.has(logical))
+      throw new Error(
+        `Duplicate generated Lambda logical ID ${logical}. Rename one of the functions.`,
+      );
+    logicalIds.add(logical);
+    functionLogicalIds.set(key, logical);
+    references.set(logical, name);
+    references.set(`${logical}.Arn`, arn);
+    references.set(`functions.${key}.Arn`, arn);
+  }
+  const resources = (finalConfig as any).resources?.Resources || {};
+  for (const [key, value] of Object.entries(resources)) {
+    const resource = value as {
+      Type?: string;
+      Properties?: { RoleName?: unknown; Path?: unknown };
+    };
+    if (resource.Type !== "AWS::IAM::Role" || options.cfStack) continue;
+    const name =
+      resource.Properties?.RoleName ??
+      localRoleName(`${resolvedServiceName}-${options.stage}`, key);
+    const rolePath = resource.Properties?.Path ?? "/";
+    // Unsupported unrelated resources must not prevent HTTP startup. A referenced
+    // unsupported role is rejected by strict environment resolution instead.
+    if (
+      typeof name !== "string" ||
+      !/^[\w+=,.@-]{1,64}$/.test(name) ||
+      typeof rolePath !== "string" ||
+      !rolePath.startsWith("/") ||
+      !rolePath.endsWith("/")
+    )
+      continue;
+    references.set(key, name);
+    references.set(`${key}.Arn`, `arn:${partition}:iam::123456789012:role${rolePath}${name}`);
+  }
+  for (const [key, value] of Object.entries(options.cfValues || {})) references.set(key, value);
+  for (const [key, logical] of functionLogicalIds) {
+    references.set(`functions.${key}.Arn`, references.get(`${logical}.Arn`)!);
+  }
+
   // Export provider environment variables with default local offline flags.
   const globalEnvironment = {
     ...DEFAULT_OFFLINE_ENV,
-    ...resolveEnvironmentVariables(finalConfig.provider?.environment),
+    ...resolveEnvironmentVariables(initialConfig.provider?.environment, context),
   };
   Object.assign(process.env, globalEnvironment);
 
+  const functions: FunctionDefinition[] = [];
   const routeDefinitions = extractRoutes(
     finalConfig.functions,
     globalEnvironment,
     getNestedValue(finalConfig, "provider.httpApi.payload"),
+    context,
+    functions,
+    initialConfig.functions,
   );
 
   return {
     config: finalConfig,
     routes: routeDefinitions,
+    functions,
     globalEnv: globalEnvironment,
     framework: "serverless",
   };

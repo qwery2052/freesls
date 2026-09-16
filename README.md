@@ -11,13 +11,13 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/freesls"><img src="https://img.shields.io/npm/v/freesls.svg?style=flat-square&color=cb3837" alt="npm version" /></a>
-  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg?style=flat-square" alt="Node Version" /></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg?style=flat-square" alt="Node Version" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.x-blue.svg?style=flat-square" alt="TypeScript" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="License" /></a>
 </p>
 
 ```
-   /\_/\   FreeSLS v0.3.7  [SLS] / [AWS SAM]
+   /\_/\   FreeSLS v0.4.0-beta.0  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
    > ^ <   ● Service: user-management-api [stage: dev]
 ────────────────────────────────────────────────────────────
@@ -112,20 +112,23 @@ Or add a script to your `package.json`:
 
 ### CLI Flags
 
-| Flag          | Alias            | Description                                                                   | Default                          |
-| ------------- | ---------------- | ----------------------------------------------------------------------------- | -------------------------------- |
-| `--sam`       | `-sam`           | 🧪 **Experimental:** Uses AWS SAM template (`template.yaml` / `template.yml`) | `false`                          |
-| `--sls`       | `-sls`           | Uses Serverless Framework template (`serverless.yml`)                         | `true` (default)                 |
-| `--stage`     | `-s`             | Target deployment stage (`dev`, `staging`, `prod`)                            | `develop`                        |
-| `--region`    | `-r`             | AWS region for SSM and Lambda context                                         | `us-east-1`                      |
-| `--port`      | `-p`             | HTTP port for the local server                                                | `4000`                           |
-| `--base-path` | `-b`, `--prefix` | Base path prefix for all endpoints (e.g. `/medical-history-app`)              | `""` (root `/`)                  |
-| `--profile`   |                  | AWS CLI / AWS SSO profile name                                                | System environment credentials   |
-| `--param`     |                  | Custom key=value parameters (injected into `process.env`)                     | `{}`                             |
-| `--no-ssm`    |                  | Disables AWS SSM queries (uses `ssm.env`, YAML fallbacks, or mocks)           | `false` (queries real AWS SSM)   |
-| `--show-env`  |                  | Displays full, unmasked environment variables in console                      | `false` (masks sensitive values) |
-| `--debug`     | `-d`             | Enables verbose lifecycle debug logging with stage timings                    | `false`                          |
-| `--version`   | `-v`, `-V`       | Displays the installed FreeSLS version                                        |                                  |
+| Flag                        | Alias            | Description                                                                     | Default                          |
+| --------------------------- | ---------------- | ------------------------------------------------------------------------------- | -------------------------------- |
+| `--sam`                     | `-sam`           | 🧪 **Experimental:** Uses AWS SAM template (`template.yaml` / `template.yml`)   | `false`                          |
+| `--sls`                     | `-sls`           | Uses Serverless Framework template (`serverless.yml`)                           | `true` (default)                 |
+| `--stage`                   | `-s`             | Target deployment stage (`dev`, `staging`, `prod`)                              | `develop`                        |
+| `--region`                  | `-r`             | AWS region for SSM and Lambda context                                           | `us-east-1`                      |
+| `--port`                    | `-p`             | HTTP port for the local server                                                  | `4000`                           |
+| `--base-path`               | `-b`, `--prefix` | Base path prefix for all endpoints (e.g. `/medical-history-app`)                | `""` (root `/`)                  |
+| `--profile`                 |                  | AWS CLI / AWS SSO profile name                                                  | System environment credentials   |
+| `--param`                   |                  | Custom key=value parameters (injected into `process.env`)                       | `{}`                             |
+| `--no-ssm`                  |                  | Disables AWS SSM queries (uses `ssm.env`, YAML fallbacks, or mocks)             | `false` (queries real AWS SSM)   |
+| `--scheduler`               |                  | Enable the local one-time Lambda Scheduler endpoint                             | `false`                          |
+| `--cf-stack <stack>`        |                  | Read parameters, outputs and resource IDs from an existing CloudFormation stack | Disabled                         |
+| `--cf-value <key=value...>` |                  | Override a reference (for example `SchedulerRole.Arn=arn:...`)                  | None                             |
+| `--show-env`                |                  | Displays full, unmasked environment variables in console                        | `false` (masks sensitive values) |
+| `--debug`                   | `-d`             | Enables verbose lifecycle debug logging with stage timings                      | `false`                          |
+| `--version`                 | `-v`, `-V`       | Displays the installed FreeSLS version                                          |                                  |
 
 > [!WARNING]
 > **AWS SAM Mode (`--sam`) is Experimental**
@@ -150,6 +153,15 @@ freesls -sam -s dev -p 4000 --profile my-org-dev
 # Run completely offline without AWS credentials
 freesls -s local --no-ssm
 
+# Local Scheduler (application SDK clients still require signing credentials)
+freesls -s local --scheduler --no-ssm
+
+# Local Scheduler with read-only deployed stack lookup and existing AWS credentials
+freesls -s dev --scheduler --cf-stack my-service-dev --profile my-org-dev
+
+# Override an attribute that CloudFormation cannot return directly
+freesls --scheduler --no-ssm --cf-value SchedulerRole.Arn=arn:aws:iam::123456789012:role/team/scheduler
+
 # Inject custom parameters into process.env and ${param:...}
 freesls -s dev --param domain=api.local --param deploymentStage=dev
 
@@ -162,9 +174,79 @@ freesls -s dev --debug
 
 ---
 
+## Local Scheduler and CloudFormation references
+
+FreeSLS 0.4 requires **Node.js 20+**, matching the AWS SDK runtime requirement. `--scheduler` enables an in-memory EventBridge **Scheduler** endpoint on a dynamically allocated loopback port; it is independent of the HTTP port and base path. This does not implement the EventBridge event bus (`PutEvents`).
+
+### Calling Scheduler from a handler
+
+FreeSLS injects `AWS_ENDPOINT_URL_SCHEDULER` into function environments **before loading modules**. Use an AWS SDK v3 client that supports service-specific endpoint environment variables (integration-tested with `@aws-sdk/client-scheduler@3.1133.0`):
+
+```ts
+const scheduler = new SchedulerClient({ region: "us-east-1" });
+await scheduler.send(
+  new CreateScheduleCommand({
+    Name: "example-job",
+    ScheduleExpression: "at(2030-01-01T10:00:00)", // choose a future date
+    ScheduleExpressionTimezone: "America/Bogota",
+    FlexibleTimeWindow: { Mode: "OFF" },
+    ActionAfterCompletion: "DELETE",
+    Target: {
+      Arn: process.env.TARGET_ARN,
+      RoleArn: process.env.SCHEDULER_ROLE_ARN,
+      Input: JSON.stringify({ example: true }),
+      RetryPolicy: { MaximumRetryAttempts: 2, MaximumEventAgeInSeconds: 3600 },
+    },
+  }),
+);
+```
+
+An explicit client `endpoint` takes precedence; `AWS_IGNORE_CONFIGURED_ENDPOINT_URLS=true` disables environment endpoint configuration. For older clients, configure `endpoint: process.env.AWS_ENDPOINT_URL_SCHEDULER` explicitly or upgrade. Clients still need signing credentials. Existing credentials/profiles are preserved. For a purely local application, explicitly configure dummy credentials in its local client or shell (`AWS_ACCESS_KEY_ID=local`, `AWS_SECRET_ACCESS_KEY=local`). Do not replace real credentials when the application also calls real AWS services. The local endpoint does not validate IAM permissions or signatures.
+
+| Supported   | Contract                                                                                                                              |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Operations  | `CreateSchedule`, `GetSchedule`, `DeleteSchedule`; group `default` only                                                               |
+| Dates       | Future `at(...)` dates; IANA time zones from Node's ICU data, UTC by default                                                          |
+| Targets     | Exact ARNs of registered project Lambdas, including functions without HTTP events                                                     |
+| Input       | Explicit valid JSON up to 256 KB, delivered directly to the handler; use `'{}'` for an empty event                                    |
+| State       | `ENABLED` / `DISABLED`; no update operation yet                                                                                       |
+| Completion  | `NONE` keeps the record; `DELETE` removes it after delivery or exhausted delivery attempts                                            |
+| Retries     | 0–185 additional delivery attempts (default 185), event age 60–86400 seconds (default 86400)                                          |
+| Idempotency | Reusing a `ClientToken` with the same parameters returns the original ARN; different parameters conflict; tokens live for the session |
+
+Unsupported fields/operations return SDK-compatible errors with corrective guidance: `cron`, `rate`, flexible windows, custom groups, aliases/versions, external Lambdas, universal targets, DLQs, KMS, StartDate/EndDate and Scheduler context placeholders. Missing/ambiguous wall-clock dates during DST transitions are explicitly rejected: use an unambiguous date or UTC. AWS's default notification for omitted Input is not emulated.
+
+Timers aim for the specified instant rather than reproducing AWS's 60-second delivery window. Functions execute serially with HTTP handlers in the same process; breakpoints or CPU-bound handlers can delay execution. Retries apply to **delivery acceptance**, not handler failures: local acceptance succeeds for registered targets, so retry policies are validated but do not repeat handler invocations. Backoff is deterministic exponential (1 second up to 60 seconds), without AWS jitter. Accepted invocations execute once locally; Lambda's own asynchronous retry/DLQ service is not emulated. Handler failures log the function identity without payload/error contents; inspect them with a debugger. Schedules are lost on restart, shutdown cancels future deliveries, and already accepted invocations are not durably drained.
+
+### Resolving resource references
+
+Serverless environment `Ref`, `Fn::GetAtt` and `Fn::Sub` support registered Lambda identities and locally declared IAM roles. For example:
+
+```yaml
+provider:
+  environment:
+    TARGET_ARN: !GetAtt SendDashpushLambdaFunction.Arn
+    SCHEDULER_ROLE_ARN: !GetAtt SchedulerRole.Arn
+resources:
+  Resources:
+    SchedulerRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: local-scheduler
+functions:
+  send-push:
+    handler: src/send.handler
+```
+
+Serverless generated logical IDs normalize `-` to `Dash`, `_` to `Underscore`, capitalize the first character and append `LambdaFunction`. Function names use explicit `name` or `${service}-${stage}-${key}`. SAM uses `FunctionName` or `${service}-${logicalId}` and supports non-HTTP handlers and `CodeUri`. Local Lambda/IAM ARNs account for commercial, China and GovCloud partitions; the default account is `123456789012`. Local IAM role names/paths must be scalar strings. No resources are deployed.
+
+`--cf-stack` uses read-only `DescribeStacks` and paginated `ListStackResources` calls with the configured profile/region, once per configuration load. Stack parameters and supported resource Ref values (Lambda, IAM role, S3, DynamoDB, SQS, SNS) become available. Outputs are accessible through `!Ref Outputs.OutputKey` or `${Outputs.OutputKey}` within `!Sub` (a FreeSLS extension). A physical resource ID is **not** an arbitrary GetAtt attribute: for a deployed role ARN, expose an output or use `--cf-value SchedulerRole.Arn=...`, including the real role path. Stack access failures never silently fall back to mocks.
+
+Explicit `--cf-value` references override looked-up/local values. Project Lambda targets remain local and are never invoked remotely. Serverless's legacy HTTP-only mode retains blank unsupported direct Ref/GetAtt values for compatibility; enabling `--scheduler`, `--cf-stack` or `--cf-value` makes them strict errors. Unsupported Sub mappings always fail explicitly. SSM contents are terminal data, not additional configuration expressions. SAM remains experimental for other CloudFormation resource types.
+
 ## 🔒 Offline Mode & SSM Mocks (`--no-ssm`)
 
-When running with `--no-ssm`, FreeSLS **does not connect to AWS** and resolves `${ssm:/...}` parameters following this priority chain:
+When running with `--no-ssm`, FreeSLS **does not query AWS SSM** and resolves `${ssm:/...}` parameters following this priority chain. `--cf-stack` separately enables CloudFormation reads; application SDK calls are independent:
 
 ```
 1. ssm.env file  ──►  2. YAML Fallback  ──►  3. Automatic Safety Mock

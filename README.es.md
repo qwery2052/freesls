@@ -11,13 +11,13 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/freesls"><img src="https://img.shields.io/npm/v/freesls.svg?style=flat-square&color=cb3837" alt="npm version" /></a>
-  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg?style=flat-square" alt="Node Version" /></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg?style=flat-square" alt="Node Version" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.x-blue.svg?style=flat-square" alt="TypeScript" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="License" /></a>
 </p>
 
 ```
-   /\_/\   FreeSLS v0.3.7  [SLS] / [AWS SAM]
+   /\_/\   FreeSLS v0.4.0-beta.0  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
    > ^ <   ● Service: user-management-api [stage: dev]
 ────────────────────────────────────────────────────────────
@@ -109,20 +109,23 @@ O agregar un script a tu `package.json`:
 
 ### Opciones de CLI
 
-| Opción        | Alias            | Descripción                                                                     | Valor por Defecto                |
-| ------------- | ---------------- | ------------------------------------------------------------------------------- | -------------------------------- |
-| `--sam`       | `-sam`           | 🧪 **Experimental:** Usa template de AWS SAM (`template.yaml` / `template.yml`) | `false`                          |
-| `--sls`       | `-sls`           | Usa template de Serverless Framework (`serverless.yml`)                         | `true` (por defecto)             |
-| `--stage`     | `-s`             | Stage de despliegue (`dev`, `staging`, `prod`)                                  | `develop`                        |
-| `--region`    | `-r`             | Región de AWS para SSM y contexto Lambda                                        | `us-east-1`                      |
-| `--port`      | `-p`             | Puerto HTTP para el servidor local                                              | `4000`                           |
-| `--base-path` | `-b`, `--prefix` | Prefijo de ruta base para todos los endpoints (ej. `/medical-history-app`)      | `""` (raíz `/`)                  |
-| `--profile`   |                  | Perfil de AWS CLI / AWS SSO                                                     | Variables de entorno del sistema |
-| `--param`     |                  | Parámetros clave=valor (se inyectan a `process.env`)                            | `{}`                             |
-| `--no-ssm`    |                  | Desactiva consultas a AWS SSM (usa `ssm.env`, fallbacks o mocks)                | `false` (resuelve SSM real)      |
-| `--show-env`  |                  | Muestra los valores de variables sin enmascarar en consola                      | `false` (enmascara secretos)     |
-| `--debug`     | `-d`             | Activa logs detallados del ciclo de vida con tiempos por etapa                  | `false`                          |
-| `--version`   | `-v`, `-V`       | Muestra la versión actual instalada                                             |                                  |
+| Opción                        | Alias            | Descripción                                                                     | Valor por Defecto                |
+| ----------------------------- | ---------------- | ------------------------------------------------------------------------------- | -------------------------------- |
+| `--sam`                       | `-sam`           | 🧪 **Experimental:** Usa template de AWS SAM (`template.yaml` / `template.yml`) | `false`                          |
+| `--sls`                       | `-sls`           | Usa template de Serverless Framework (`serverless.yml`)                         | `true` (por defecto)             |
+| `--stage`                     | `-s`             | Stage de despliegue (`dev`, `staging`, `prod`)                                  | `develop`                        |
+| `--region`                    | `-r`             | Región de AWS para SSM y contexto Lambda                                        | `us-east-1`                      |
+| `--port`                      | `-p`             | Puerto HTTP para el servidor local                                              | `4000`                           |
+| `--base-path`                 | `-b`, `--prefix` | Prefijo de ruta base para todos los endpoints (ej. `/medical-history-app`)      | `""` (raíz `/`)                  |
+| `--profile`                   |                  | Perfil de AWS CLI / AWS SSO                                                     | Variables de entorno del sistema |
+| `--param`                     |                  | Parámetros clave=valor (se inyectan a `process.env`)                            | `{}`                             |
+| `--no-ssm`                    |                  | Desactiva consultas a AWS SSM (usa `ssm.env`, fallbacks o mocks)                | `false` (resuelve SSM real)      |
+| `--scheduler`                 |                  | Activa el endpoint Scheduler local para Lambdas y ejecuciones únicas            | `false`                          |
+| `--cf-stack <stack>`          |                  | Lee parámetros, outputs e identificadores de un stack existente                 | Desactivado                      |
+| `--cf-value <clave=valor...>` |                  | Sobrescribe una referencia (por ejemplo `SchedulerRole.Arn=arn:...`)            | Ninguno                          |
+| `--show-env`                  |                  | Muestra los valores de variables sin enmascarar en consola                      | `false` (enmascara secretos)     |
+| `--debug`                     | `-d`             | Activa logs detallados del ciclo de vida con tiempos por etapa                  | `false`                          |
+| `--version`                   | `-v`, `-V`       | Muestra la versión actual instalada                                             |                                  |
 
 > [!WARNING]
 > **El modo AWS SAM (`--sam`) es Experimental**
@@ -147,6 +150,15 @@ freesls -sam -s dev -p 4000 --profile mi-empresa-dev
 # Ejecutar completamente offline sin conexión a AWS
 freesls -s local --no-ssm
 
+# Scheduler local (los clientes SDK de la aplicación requieren credenciales de firma)
+freesls -s local --scheduler --no-ssm
+
+# Scheduler local con consulta de solo lectura a un stack y credenciales existentes
+freesls -s dev --scheduler --cf-stack my-service-dev --profile mi-empresa-dev
+
+# Sobrescribir un atributo que CloudFormation no devuelve directamente
+freesls --scheduler --no-ssm --cf-value SchedulerRole.Arn=arn:aws:iam::123456789012:role/team/scheduler
+
 # Inyectar parámetros personalizados a process.env y ${param:...}
 freesls -s dev --param domain=api.local --param deploymentStage=dev
 
@@ -159,9 +171,79 @@ freesls -s dev --debug
 
 ---
 
+## Scheduler local y referencias CloudFormation
+
+FreeSLS 0.4 requiere **Node.js 20+**, acorde con el SDK de AWS. `--scheduler` activa un endpoint de EventBridge **Scheduler** en memoria, en un puerto loopback asignado automáticamente e independiente del puerto y prefijo HTTP. No implementa el bus de eventos EventBridge (`PutEvents`).
+
+### Llamar a Scheduler desde un handler
+
+FreeSLS inyecta `AWS_ENDPOINT_URL_SCHEDULER` en el entorno **antes de cargar los módulos**. Usa un cliente AWS SDK v3 compatible con endpoints por servicio mediante variables de entorno (probado con `@aws-sdk/client-scheduler@3.1133.0`):
+
+```ts
+const scheduler = new SchedulerClient({ region: "us-east-1" });
+await scheduler.send(
+  new CreateScheduleCommand({
+    Name: "example-job",
+    ScheduleExpression: "at(2030-01-01T10:00:00)", // choose a future date
+    ScheduleExpressionTimezone: "America/Bogota",
+    FlexibleTimeWindow: { Mode: "OFF" },
+    ActionAfterCompletion: "DELETE",
+    Target: {
+      Arn: process.env.TARGET_ARN,
+      RoleArn: process.env.SCHEDULER_ROLE_ARN,
+      Input: JSON.stringify({ example: true }),
+      RetryPolicy: { MaximumRetryAttempts: 2, MaximumEventAgeInSeconds: 3600 },
+    },
+  }),
+);
+```
+
+Un `endpoint` explícito en el cliente tiene prioridad; `AWS_IGNORE_CONFIGURED_ENDPOINT_URLS=true` desactiva la configuración por entorno. Para clientes antiguos, configura `endpoint: process.env.AWS_ENDPOINT_URL_SCHEDULER` explícitamente o actualiza el SDK. El SDK necesita credenciales de firma. Se preservan los perfiles y credenciales existentes. En una aplicación exclusivamente local, configura credenciales ficticias en el cliente local o en la terminal (`AWS_ACCESS_KEY_ID=local`, `AWS_SECRET_ACCESS_KEY=local`). No reemplaces credenciales reales si la aplicación también consulta AWS. El endpoint local no valida permisos IAM ni firmas.
+
+| Soportado    | Contrato                                                                                                                         |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| Operaciones  | `CreateSchedule`, `GetSchedule`, `DeleteSchedule`; solo grupo `default`                                                          |
+| Fechas       | Fechas futuras `at(...)`; zonas IANA disponibles en ICU de Node, UTC por defecto                                                 |
+| Destinos     | ARN exacto de Lambdas registradas del proyecto, incluidas funciones sin eventos HTTP                                             |
+| Input        | JSON explícito válido de hasta 256 KB, entregado directamente al handler; usa `'{}'` para un evento vacío                        |
+| Estado       | `ENABLED` / `DISABLED`; todavía sin operación de actualización                                                                   |
+| Finalización | `NONE` conserva el registro; `DELETE` lo elimina tras entregar o agotar los intentos de entrega                                  |
+| Reintentos   | 0–185 intentos adicionales de entrega (185 por defecto), edad del evento 60–86400 segundos (86400 por defecto)                   |
+| Idempotencia | El mismo `ClientToken` y parámetros devuelve el ARN original; parámetros distintos generan conflicto; los tokens duran la sesión |
+
+Las opciones no soportadas devuelven errores compatibles con el SDK y una guía: `cron`, `rate`, ventanas flexibles, grupos personalizados, aliases/versiones, Lambdas externas, destinos universales, DLQ, KMS, StartDate/EndDate y placeholders de contexto Scheduler. Las horas inexistentes o ambiguas por cambios de horario se rechazan explícitamente: usa una fecha inequívoca o UTC. No se emula la notificación predeterminada de AWS cuando se omite Input.
+
+Los temporizadores apuntan al instante indicado, sin reproducir la ventana de precisión de 60 segundos de AWS. Las funciones se ejecutan secuencialmente junto a los handlers HTTP; los breakpoints o handlers que bloquean CPU pueden retrasarlas. Los reintentos corresponden a **aceptación de entrega**, no a errores del handler: la aceptación local tiene éxito para destinos registrados, por lo que las políticas de reintento se validan pero no repiten invocaciones. Se usa espera exponencial determinista (de 1 a 60 segundos), sin jitter AWS. Una invocación aceptada se ejecuta una vez: no se emula el servicio de reintentos/DLQ asíncronos de Lambda. Los errores muestran la identidad de la función sin contenido del error o payload; inspecciónalos con el depurador. Las programaciones se pierden al reiniciar, el apagado cancela futuras entregas y no garantiza drenar las invocaciones ya aceptadas.
+
+### Resolver referencias a recursos
+
+En Serverless, `Ref`, `Fn::GetAtt` y `Fn::Sub` del entorno soportan identidades Lambda registradas y roles IAM declarados localmente. Ejemplo:
+
+```yaml
+provider:
+  environment:
+    TARGET_ARN: !GetAtt SendDashpushLambdaFunction.Arn
+    SCHEDULER_ROLE_ARN: !GetAtt SchedulerRole.Arn
+resources:
+  Resources:
+    SchedulerRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: local-scheduler
+functions:
+  send-push:
+    handler: src/send.handler
+```
+
+Los IDs lógicos generados de Serverless convierten `-` en `Dash` y `_` en `Underscore`, ponen la primera letra en mayúscula y añaden `LambdaFunction`. El nombre utiliza `name` explícito o `${service}-${stage}-${key}`. SAM utiliza `FunctionName` o `${service}-${logicalId}`, admite handlers sin HTTP y `CodeUri`. Los ARN locales Lambda/IAM consideran las particiones comercial, China y GovCloud; la cuenta predeterminada es `123456789012`. Los nombres y paths de roles IAM locales deben ser cadenas escalares. No se despliegan recursos.
+
+`--cf-stack` consulta `DescribeStacks` y `ListStackResources` paginado con perfil/región configurados, una vez por carga. Expone parámetros y valores Ref soportados (Lambda, rol IAM, S3, DynamoDB, SQS, SNS). Los outputs se acceden con `!Ref Outputs.OutputKey` o `${Outputs.OutputKey}` dentro de `!Sub` (extensión de FreeSLS). El identificador físico **no** es cualquier atributo GetAtt: para un ARN de rol desplegado, expón un output o usa `--cf-value SchedulerRole.Arn=...` incluyendo su path real. Los errores de consulta no se convierten silenciosamente en mocks.
+
+Los valores explícitos de `--cf-value` tienen prioridad sobre consultas y valores locales. Las Lambdas del proyecto siempre se ejecutan localmente. El modo HTTP tradicional de Serverless conserva referencias directas Ref/GetAtt no soportadas como cadenas vacías por compatibilidad; `--scheduler`, `--cf-stack` o `--cf-value` activan errores estrictos. Los mappings Sub no soportados siempre fallan explícitamente. El contenido SSM es un dato terminal, no otra expresión de configuración. SAM sigue siendo experimental para los demás tipos de recursos CloudFormation.
+
 ## 🔒 Modo Offline y Mocks de SSM (`--no-ssm`)
 
-Cuando ejecutas con `--no-ssm`, FreeSLS **no se conecta a AWS** y resuelve los parámetros `${ssm:/...}` siguiendo este orden de prioridad:
+Cuando ejecutas con `--no-ssm`, FreeSLS **no consulta AWS SSM** y resuelve `${ssm:/...}` siguiendo este orden de prioridad. `--cf-stack` habilita por separado consultas a CloudFormation; las llamadas SDK de la aplicación son independientes:
 
 ```
 1. Archivo ssm.env  ──►  2. Fallback en YAML  ──►  3. Mock automático de seguridad

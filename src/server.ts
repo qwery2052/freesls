@@ -7,6 +7,7 @@ import pc from "picocolors";
 import { createJiti, type ModuleCache } from "jiti";
 import {
   type RouteDefinition,
+  type FunctionDefinition,
   type APIGatewayProxyEvent,
   type APIGatewayProxyEventV2,
   type LambdaContext,
@@ -315,18 +316,21 @@ function buildApiGatewayEvent(
  * The remaining time is advisory only; in-process execution cannot be cancelled.
  */
 function buildLambdaContext(
-  routeDefinition: RouteDefinition,
+  routeDefinition: FunctionDefinition,
   options: ServerOptions,
   startTime: number,
   complete: LambdaContext["done"],
 ): LambdaContext {
+  const runtimeName = routeDefinition.arn?.split(":function:")[1] || routeDefinition.functionName;
   return {
-    functionName: routeDefinition.functionName,
+    functionName: runtimeName,
     functionVersion: "$LATEST",
-    invokedFunctionArn: `arn:aws:lambda:${options.region || "us-east-1"}:123456789012:function:${routeDefinition.functionName}`,
+    invokedFunctionArn:
+      routeDefinition.arn ||
+      `arn:aws:lambda:${options.region || "us-east-1"}:123456789012:function:${routeDefinition.functionName}`,
     memoryLimitInMB: "1024",
     awsRequestId: crypto.randomUUID(),
-    logGroupName: `/aws/lambda/${routeDefinition.functionName}`,
+    logGroupName: `/aws/lambda/${runtimeName}`,
     logStreamName: `[$LATEST]${crypto.randomBytes(16).toString("hex")}`,
     getRemainingTimeInMillis: () =>
       Math.max(0, DEFAULT_TIMEOUT_MILLISECONDS - (Date.now() - startTime)),
@@ -349,7 +353,7 @@ function normalizeError(error: unknown): Error {
 }
 
 type LambdaHandler = (
-  event: APIGatewayProxyEvent | APIGatewayProxyEventV2,
+  event: unknown,
   context: LambdaContext,
   callback: LambdaContext["done"],
 ) => unknown;
@@ -358,8 +362,8 @@ type LambdaHandler = (
 // Detached work and event-loop draining are not tracked; never release the queue on a timer.
 function invokeLambdaHandler(
   handlerFunction: LambdaHandler,
-  event: APIGatewayProxyEvent | APIGatewayProxyEventV2,
-  route: RouteDefinition,
+  event: unknown,
+  route: FunctionDefinition,
   options: ServerOptions,
 ): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -486,12 +490,7 @@ function sendLambdaResponse(
 /**
  * Create the local HTTP application.
  */
-export function createServerApp(
-  routes: RouteDefinition[],
-  options: ServerOptions,
-): express.Express {
-  const app = express();
-
+export function createLambdaExecutor(options: ServerOptions) {
   // Source maps preserve in-process debugging. Transformed modules reload, but
   // Jiti's native ESM/CJS paths still cache modules and their import-time env.
   // Functions sharing native files/dependencies must not rely on isolated snapshots.
@@ -503,6 +502,77 @@ export function createServerApp(
     tryNative: false,
   });
   jitiRuntime.options.transform = createTypeScriptTransform(jitiRuntime.options.transform!);
+
+  return (definition: FunctionDefinition, event: unknown, reqId?: string): Promise<unknown> => {
+    const pathStart = Date.now();
+    const { filePath, functionName } = resolveHandlerPath(options.workingDir, definition.handler);
+    if (options.debug) {
+      logDebug(
+        "PATH",
+        `Resolved handler: ${path.relative(options.workingDir, filePath)} -> ${functionName}`,
+        Date.now() - pathStart,
+        reqId,
+      );
+      logDebug("QUEUE", "Waiting for execution queue slot...", undefined, reqId);
+    }
+    const queueStart = Date.now();
+    return withTemporaryEnvironment(definition.environment, async () => {
+      if (options.debug)
+        logDebug("QUEUE", "Acquired invocation slot", Date.now() - queueStart, reqId);
+      const cache = new Proxy(Object.create(null) as ModuleCache, {
+        get: (target, key) =>
+          Reflect.get(target, typeof key === "string" ? path.normalize(key) : key),
+        set: (target, key, value) =>
+          Reflect.set(target, typeof key === "string" ? path.normalize(key) : key, value),
+      });
+      if (options.debug)
+        logDebug("JITI", "Evaluating handler module with Jiti...", undefined, reqId);
+      const importStart = Date.now();
+      const imported = (await jitiRuntime.evalModule(fs.readFileSync(filePath, "utf8"), {
+        filename: filePath,
+        async: true,
+        cache,
+      })) as Record<string, unknown>;
+      if (options.debug)
+        logDebug("JITI", "Module evaluated and loaded", Date.now() - importStart, reqId);
+      const defaultExport = imported.default;
+      const handler =
+        imported[functionName] ||
+        (defaultExport && typeof defaultExport === "object"
+          ? (defaultExport as Record<string, unknown>)[functionName]
+          : undefined) ||
+        (functionName === "default" ? defaultExport : undefined);
+      if (typeof handler !== "function")
+        throw new Error(
+          `Function "${functionName}" was not exported by "${filePath}". Available exports: ${Object.keys(imported).join(", ")}`,
+        );
+      if (options.debug)
+        logDebug(
+          "LAMBDA",
+          `Invoking "${definition.functionName}" (${functionName})...`,
+          undefined,
+          reqId,
+        );
+      const invokeStart = Date.now();
+      const result = await invokeLambdaHandler(
+        handler as LambdaHandler,
+        event,
+        definition,
+        options,
+      );
+      if (options.debug)
+        logDebug("LAMBDA", "Handler execution finished", Date.now() - invokeStart, reqId);
+      return result;
+    });
+  };
+}
+
+export function createServerApp(
+  routes: RouteDefinition[],
+  options: ServerOptions,
+): express.Express {
+  const app = express();
+  const execute = createLambdaExecutor(options);
 
   let requestCounter = 0;
 
@@ -556,107 +626,15 @@ export function createServerApp(
       }
 
       try {
-        const resolveStart = Date.now();
-        const { filePath, functionName } = resolveHandlerPath(options.workingDir, route.handler);
-
-        if (options.debug) {
+        const event = buildApiGatewayEvent(request, route, options);
+        if (options.debug)
           logDebug(
-            "PATH",
-            `Resolved handler: ${path.relative(options.workingDir, filePath)} -> ${functionName}`,
-            Date.now() - resolveStart,
+            "EVENT",
+            `Built API Gateway ${route.payloadVersion ?? "1.0"} event`,
+            undefined,
             reqId,
           );
-        }
-
-        const queueWaitStart = Date.now();
-        if (options.debug) {
-          logDebug("QUEUE", `Waiting for execution queue slot...`, undefined, reqId);
-        }
-
-        const lambdaResult = await withTemporaryEnvironment(route.environment, async () => {
-          if (options.debug) {
-            logDebug(
-              "QUEUE",
-              `Acquired slot. Injected ${Object.keys(route.environment || {}).length} environment variables`,
-              Date.now() - queueWaitStart,
-              reqId,
-            );
-          }
-
-          // Jiti's alias and relative resolvers can return different slash styles on Windows.
-          // Share in-progress exports by normalized filename so cycles do not execute twice.
-          // A fresh cache per invocation preserves source reloads and route environments.
-          const cache = new Proxy(Object.create(null) as ModuleCache, {
-            get: (target, key) =>
-              Reflect.get(target, typeof key === "string" ? path.normalize(key) : key),
-            set: (target, key, value) =>
-              Reflect.set(target, typeof key === "string" ? path.normalize(key) : key, value),
-          });
-
-          const jitiStart = Date.now();
-          if (options.debug) {
-            logDebug("JITI", `Evaluating handler module with Jiti...`, undefined, reqId);
-          }
-
-          const importedModule = (await jitiRuntime.evalModule(fs.readFileSync(filePath, "utf8"), {
-            filename: filePath,
-            async: true,
-            cache,
-          })) as Record<string, unknown>;
-
-          if (options.debug) {
-            logDebug("JITI", `Module evaluated and loaded`, Date.now() - jitiStart, reqId);
-          }
-
-          const defaultExport = importedModule.default;
-          const targetHandler =
-            importedModule[functionName] ||
-            (defaultExport && typeof defaultExport === "object"
-              ? (defaultExport as Record<string, unknown>)[functionName]
-              : undefined) ||
-            (functionName === "default" ? importedModule.default : undefined);
-
-          if (typeof targetHandler !== "function") {
-            throw new Error(
-              `Function "${functionName}" was not exported by "${filePath}". Available exports: ${Object.keys(importedModule).join(", ")}`,
-            );
-          }
-
-          const eventStart = Date.now();
-          const apiGatewayEvent = buildApiGatewayEvent(request, route, options);
-
-          if (options.debug) {
-            logDebug(
-              "EVENT",
-              `Built API Gateway ${route.payloadVersion ?? "1.0"} event (headers: ${Object.keys(apiGatewayEvent.headers || {}).length})`,
-              Date.now() - eventStart,
-              reqId,
-            );
-          }
-
-          const lambdaStart = Date.now();
-          if (options.debug) {
-            logDebug(
-              "LAMBDA",
-              `Invoking "${route.functionName}" (${functionName})...`,
-              undefined,
-              reqId,
-            );
-          }
-
-          const result = await invokeLambdaHandler(
-            targetHandler as LambdaHandler,
-            apiGatewayEvent,
-            route,
-            options,
-          );
-
-          if (options.debug) {
-            logDebug("LAMBDA", `Handler execution finished`, Date.now() - lambdaStart, reqId);
-          }
-
-          return result;
-        });
+        const lambdaResult = await execute(route, event, reqId);
 
         const respStart = Date.now();
         sendLambdaResponse(response, lambdaResult, route.payloadVersion ?? "1.0");
