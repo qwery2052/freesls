@@ -94,6 +94,18 @@ const realClock: SchedulerClock = {
   setTimeout: (callback, delay) => setTimeout(callback, delay),
   clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
+export interface SchedulerEvent {
+  type: "received" | "firing" | "delivered" | "cancelled" | "expired" | "failed";
+  name: string;
+  target: string;
+  due?: number;
+  timezone?: string;
+  state?: string;
+  action?: string;
+  retries?: number;
+  maxAgeSeconds?: number;
+}
+
 interface Schedule {
   body: Record<string, unknown>;
   arn: string;
@@ -118,6 +130,7 @@ export class LocalScheduler {
     private readonly deliver: (arn: string, input: unknown) => Promise<void>,
     private readonly clock: SchedulerClock = realClock,
     private readonly report: (message: string) => void = message => console.error(message),
+    private readonly log: (event: SchedulerEvent) => void = () => {},
   ) {}
 
   private identity(name: string, group: unknown) {
@@ -270,6 +283,17 @@ export class LocalScheduler {
     this.schedules.set(name, schedule);
     if (typeof token === "string") this.tokens.set(token, { fingerprint, arn });
     if (body.State === "ENABLED") this.arm(name, schedule, due);
+    this.log({
+      type: "received",
+      name,
+      target: target.Arn,
+      due,
+      timezone: String(body.ScheduleExpressionTimezone),
+      state: String(body.State),
+      action: String(body.ActionAfterCompletion),
+      retries: Number(retries),
+      maxAgeSeconds: Number(age),
+    });
     return { ScheduleArn: arn };
   }
 
@@ -301,6 +325,12 @@ export class LocalScheduler {
         "Schedule does not exist in this local session.",
         404,
       );
+    this.removeSchedule(name, schedule);
+    this.log({ type: "cancelled", name, target: schedule.target });
+  }
+
+  private removeSchedule(name: string, schedule: Schedule) {
+    if (this.schedules.get(name) !== schedule) return;
     if (schedule.timer !== undefined) this.clock.clearTimeout(schedule.timer);
     this.schedules.delete(name);
   }
@@ -321,18 +351,20 @@ export class LocalScheduler {
   }
 
   private async dispatch(name: string, s: Schedule) {
-    const complete = () => {
-      if (this.schedules.get(name) === s && s.body.ActionAfterCompletion === "DELETE")
-        this.delete(name);
+    const finish = () => {
+      if (s.body.ActionAfterCompletion === "DELETE") this.removeSchedule(name, s);
     };
     if (this.clock.now() - s.due >= s.maxAge) {
       this.report(`[FreeSLS Scheduler] Delivery expired for ${name}.`);
-      complete();
+      this.log({ type: "expired", name, target: s.target });
+      finish();
       return;
     }
+    this.log({ type: "firing", name, target: s.target, due: s.due });
     try {
       await this.deliver(s.target, structuredClone(s.payload));
-      complete();
+      this.log({ type: "delivered", name, target: s.target });
+      finish();
     } catch {
       if (this.closed || this.schedules.get(name) !== s) return;
       if (s.attempts++ < s.retries && this.clock.now() - s.due < s.maxAge) {
@@ -347,7 +379,8 @@ export class LocalScheduler {
         );
       } else {
         this.report(`[FreeSLS Scheduler] Delivery failed for ${name}; retry policy exhausted.`);
-        complete();
+        this.log({ type: "failed", name, target: s.target });
+        finish();
       }
     }
   }

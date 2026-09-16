@@ -17,7 +17,7 @@
 </p>
 
 ```
-   /\_/\   FreeSLS v0.4.0-beta.0  [SLS] / [AWS SAM]
+   /\_/\   FreeSLS v0.4.0-beta.5  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
    > ^ <   ● Service: user-management-api [stage: dev]
 ────────────────────────────────────────────────────────────
@@ -218,6 +218,8 @@ Unsupported fields/operations return SDK-compatible errors with corrective guida
 
 Timers aim for the specified instant rather than reproducing AWS's 60-second delivery window. Functions execute serially with HTTP handlers in the same process; breakpoints or CPU-bound handlers can delay execution. Retries apply to **delivery acceptance**, not handler failures: local acceptance succeeds for registered targets, so retry policies are validated but do not repeat handler invocations. Backoff is deterministic exponential (1 second up to 60 seconds), without AWS jitter. Accepted invocations execute once locally; Lambda's own asynchronous retry/DLQ service is not emulated. Handler failures log the function identity without payload/error contents; inspect them with a debugger. Schedules are lost on restart, shutdown cancels future deliveries, and already accepted invocations are not durably drained.
 
+FreeSLS prints a `[Lambda][start] <functionName>` line (green) to stdout for every invocation, both HTTP and Scheduler-triggered, and each HTTP request ends with a `[Lambda][end] METHOD /path status (ms)` summary line (magenta), including error responses. With `--scheduler`, FreeSLS also prints lifecycle logs: each schedule received (name, target ARN, firing time in UTC plus the declared timezone, state, completion action and retry settings), when it fires, and when delivery completes or is cancelled/expired. `Target.Input` and credentials are never logged.
+
 ### Resolving resource references
 
 Serverless environment `Ref`, `Fn::GetAtt` and `Fn::Sub` support registered Lambda identities and locally declared IAM roles. For example:
@@ -240,7 +242,7 @@ functions:
 
 Serverless generated logical IDs normalize `-` to `Dash`, `_` to `Underscore`, capitalize the first character and append `LambdaFunction`. Function names use explicit `name` or `${service}-${stage}-${key}`. SAM uses `FunctionName` or `${service}-${logicalId}` and supports non-HTTP handlers and `CodeUri`. Local Lambda/IAM ARNs account for commercial, China and GovCloud partitions; the default account is `123456789012`. Local IAM role names/paths must be scalar strings. No resources are deployed.
 
-`--cf-stack` uses read-only `DescribeStacks` and paginated `ListStackResources` calls with the configured profile/region, once per configuration load. Stack parameters and supported resource Ref values (Lambda, IAM role, S3, DynamoDB, SQS, SNS) become available. Outputs are accessible through `!Ref Outputs.OutputKey` or `${Outputs.OutputKey}` within `!Sub` (a FreeSLS extension). A physical resource ID is **not** an arbitrary GetAtt attribute: for a deployed role ARN, expose an output or use `--cf-value SchedulerRole.Arn=...`, including the real role path. Stack access failures never silently fall back to mocks.
+`--cf-stack` uses read-only `DescribeStacks` and paginated `ListStackResources` calls with the configured profile/region, once per configuration load. Stack parameters and supported resource Ref values (Lambda, IAM role, S3, DynamoDB, SQS, SNS) become available. Outputs are accessible through `!Ref Outputs.OutputKey` or `${Outputs.OutputKey}` within `!Sub` (a FreeSLS extension). A physical resource ID is **not** an arbitrary GetAtt attribute: for a deployed role ARN, expose an output or use `--cf-value SchedulerRole.Arn=...`, including the real role path. Stack access failures never silently fall back to mocks; credential/SSO failures point to `aws sso login --profile <profile>`.
 
 Explicit `--cf-value` references override looked-up/local values. Project Lambda targets remain local and are never invoked remotely. Serverless's legacy HTTP-only mode retains blank unsupported direct Ref/GetAtt values for compatibility; enabling `--scheduler`, `--cf-stack` or `--cf-value` makes them strict errors. Unsupported Sub mappings always fail explicitly. SSM contents are terminal data, not additional configuration expressions. SAM remains experimental for other CloudFormation resource types.
 

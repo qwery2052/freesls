@@ -8,6 +8,8 @@ import {
   printBanner,
   printEnvironmentSummary,
   printRoutes,
+  printSchedulerEvent,
+  printLambdaStart,
   printSsmResolutionError,
 } from "./printer.js";
 import { startServer, createLambdaExecutor } from "./server.js";
@@ -39,7 +41,7 @@ function parseCliParameters(parameterEntries?: string[], flag = "--param"): Reco
 program
   .name("freesls")
   .description("Offline API Gateway & Lambda Runner (Serverless Framework & AWS SAM)")
-  .version("0.4.0-beta.0", "-v, --version", "Output the current version number")
+  .version("0.4.0-beta.5", "-v, --version", "Output the current version number")
   .option("-s, --stage <stage>", "Deployment stage", "develop")
   .option("-r, --region <region>", "AWS region", "us-east-1")
   .option("-p, --port <port>", "Local HTTP server port", "4000")
@@ -155,12 +157,14 @@ program
             "Duplicate or missing local Lambda ARN. Use unique function names and --cf-value overrides.",
           );
         }
+        const resolveTargetName = (arn: string) => registry.get(arn)?.functionName ?? arn;
         const scheduler = new LocalScheduler(
           commandOptions.region,
           new Set(registry.keys()),
           async (arn, payload) => {
             const target = registry.get(arn);
             if (!target) throw new Error("Target is no longer registered");
+            printLambdaStart(target.functionName);
             // Acceptance and asynchronous handler completion are separate boundaries.
             void Promise.resolve()
               .then(() => execute(target, payload))
@@ -170,6 +174,9 @@ program
                 );
               });
           },
+          undefined,
+          () => {},
+          event => printSchedulerEvent(event, resolveTargetName),
         );
         schedulerServer = await startScheduler(scheduler);
         process.env.AWS_ENDPOINT_URL_SCHEDULER = schedulerServer.endpoint;

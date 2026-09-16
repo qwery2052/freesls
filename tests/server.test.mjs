@@ -799,3 +799,30 @@ test("server exposes IS_LOCAL inside lambda handlers", async t => {
   const data = res.json();
   assert.equal(data.isLocalEnv, "true");
 });
+
+test("server logs Executing and a final summary line for success and error", async t => {
+  const { request } = await fixture(
+    t,
+    {
+      "handler.js": `export function ok() { return { statusCode: 200, body: "ok" }; }
+        export function boom() { throw new Error("nope"); }`,
+    },
+    [
+      { path: "/ok", method: "get", handler: "handler.ok", functionName: "ok-fn" },
+      { path: "/boom", method: "get", handler: "handler.boom", functionName: "boom-fn" },
+    ],
+  );
+
+  const lines = [];
+  t.mock.method(console, "log", (...args) => lines.push(args.join(" ")));
+  t.mock.method(console, "error", () => {});
+
+  assert.equal((await request("/ok")).status, 200);
+  assert.equal((await request("/boom")).status, 500);
+
+  const output = lines.join("\n").replace(/\u001b\[[0-9;]*m/g, "");
+  assert.match(output, /\[start\] ok-fn/);
+  assert.match(output, /\[start\] boom-fn/);
+  assert.match(output, /\[end\].*GET\s+.*\/ok\s+200/);
+  assert.match(output, /\[end\].*GET\s+.*\/boom\s+500/);
+});

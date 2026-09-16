@@ -324,3 +324,42 @@ functions:
   assert.equal(process.env.TARGET_ONLY, originalEnv.TARGET_ONLY);
   assert.throws(() => scheduler.get("campaign-example"), /does not exist/);
 });
+
+test("scheduler emits lifecycle log events without leaking the payload", async () => {
+  const clock = new Clock();
+  const events = [];
+  const scheduler = new LocalScheduler(
+    "us-east-1",
+    new Set([arn]),
+    async () => {},
+    clock,
+    () => {},
+    event => events.push(event),
+  );
+
+  scheduler.create("logged", base());
+  assert.equal(events.at(-1).type, "received");
+  assert.equal(events.at(-1).name, "logged");
+  assert.equal(events.at(-1).target, arn);
+  assert.equal(events.at(-1).state, "ENABLED");
+  assert.equal(events.at(-1).action, "DELETE");
+
+  await clock.advance(Date.parse("2030-01-01T15:00:00Z"));
+  assert.deepEqual(
+    events.map(event => event.type),
+    ["received", "firing", "delivered"],
+  );
+  assert.throws(() => scheduler.get("logged"), /does not exist/);
+
+  scheduler.create("cancelled", {
+    ...base(),
+    ScheduleExpression: "at(2031-01-01T00:00:00)",
+  });
+  scheduler.delete("cancelled");
+  assert.equal(events.at(-1).type, "cancelled");
+
+  const serialized = JSON.stringify(events);
+  assert.ok(!serialized.includes("campaignId"));
+  assert.ok(!serialized.includes("example"));
+  scheduler.close();
+});

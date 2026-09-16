@@ -14,7 +14,13 @@ import {
   type ServerOptions,
   DEFAULT_OFFLINE_ENV,
 } from "./types.js";
-import { formatMethod, logDebug, printDebugHeaders } from "./printer.js";
+import {
+  formatMethod,
+  logDebug,
+  printDebugHeaders,
+  printLambdaEnd,
+  printLambdaStart,
+} from "./printer.js";
 import { createTypeScriptTransform } from "./typescript-transform.js";
 
 const DEFAULT_TIMEOUT_MILLISECONDS = 30000;
@@ -607,6 +613,7 @@ export function createServerApp(
     const handlerMiddleware = async (request: Request, response: Response) => {
       const startTime = Date.now();
       const reqId = `req-${++requestCounter}`;
+      printLambdaStart(route.functionName);
 
       if (options.debug) {
         logDebug(
@@ -648,14 +655,6 @@ export function createServerApp(
           );
           logDebug("DONE", `Request roundtrip complete`, Date.now() - startTime, reqId);
         }
-
-        const executionDuration = Date.now() - startTime;
-        const statusCode = response.statusCode;
-        const statusColor = statusCode >= 500 ? pc.red : statusCode >= 400 ? pc.yellow : pc.green;
-
-        console.log(
-          `  ${formatMethod(request.method)} ${pc.white(request.path)} ${statusColor(`${statusCode}`)} ${pc.dim(`(${executionDuration}ms)`)}`,
-        );
       } catch (error) {
         const executionError = normalizeError(error);
         const executionDuration = Date.now() - startTime;
@@ -683,6 +682,9 @@ export function createServerApp(
             stackTrace: executionError.stack ? executionError.stack.split("\n") : [],
           });
         }
+      } finally {
+        const executionDuration = Date.now() - startTime;
+        printLambdaEnd(request.method, request.path, response.statusCode, executionDuration);
       }
     };
 

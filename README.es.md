@@ -17,7 +17,7 @@
 </p>
 
 ```
-   /\_/\   FreeSLS v0.4.0-beta.0  [SLS] / [AWS SAM]
+   /\_/\   FreeSLS v0.4.0-beta.5  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
    > ^ <   ● Service: user-management-api [stage: dev]
 ────────────────────────────────────────────────────────────
@@ -42,6 +42,9 @@ Las herramientas tradicionales de emulación local para Serverless Framework y A
 
 - **Soporte Dual de Frameworks**: Ejecuta proyectos de **Serverless Framework** (`serverless.yml`) y **AWS SAM** (`template.yaml` / `template.yml`) con la misma herramienta.
 - **Cero configuración de compilación**: Ejecuta archivos TypeScript (`.ts`, `.tsx`) y JavaScript (`.js`, `.mjs`, `.cjs`) directamente usando [jiti](https://github.com/unjs/jiti) con source maps integrados.
+
+  Los handlers de TypeScript usan el compilador de TypeScript para campos y decoradores, y luego Jiti para la carga de módulos y los alias de rutas. El `tsconfig.json` más cercano (incluyendo `extends`) aporta target, campos de clase, decoradores y opciones de JSX. Los decoradores legacy y la metadata de decoradores se activan por defecto cuando no se especifican, manteniendo los valores por defecto previos de Jiti. Las aplicaciones deben cargar su propio runtime de metadata (como `reflect-metadata`) antes de las clases decoradas. La carga transpila archivos individuales sin verificación de tipos; la metadata que requiere inferencia de tipos entre archivos no está disponible. La salida de build y la configuración de módulos no sobrescriben el loader de Jiti. Reinicia tras cambiar los alias de rutas.
+
 - **Resolución real de AWS SSM o Mocks locales**: Consulta parámetros reales de AWS Parameter Store respetando tus perfiles de AWS SSO/CLI, o ejecuta offline con `--no-ssm` usando `ssm.env`, fallbacks o mocks automáticos.
 - **Variable de entorno offline**: Inyecta automáticamente `IS_LOCAL=true` en `process.env` y en el contexto de ejecución de las funciones, permitiendo agregar condiciones locales en tu código fácilmente.
 - **Inyección de parámetros**: Parámetros pasados vía `--param clave=valor` se inyectan automáticamente en `process.env`.
@@ -215,6 +218,8 @@ Las opciones no soportadas devuelven errores compatibles con el SDK y una guía:
 
 Los temporizadores apuntan al instante indicado, sin reproducir la ventana de precisión de 60 segundos de AWS. Las funciones se ejecutan secuencialmente junto a los handlers HTTP; los breakpoints o handlers que bloquean CPU pueden retrasarlas. Los reintentos corresponden a **aceptación de entrega**, no a errores del handler: la aceptación local tiene éxito para destinos registrados, por lo que las políticas de reintento se validan pero no repiten invocaciones. Se usa espera exponencial determinista (de 1 a 60 segundos), sin jitter AWS. Una invocación aceptada se ejecuta una vez: no se emula el servicio de reintentos/DLQ asíncronos de Lambda. Los errores muestran la identidad de la función sin contenido del error o payload; inspecciónalos con el depurador. Las programaciones se pierden al reiniciar, el apagado cancela futuras entregas y no garantiza drenar las invocaciones ya aceptadas.
 
+FreeSLS imprime una línea `[Lambda][start] <functionName>` (verde) en stdout para cada invocación, tanto HTTP como disparada por el Scheduler, y cada petición HTTP termina con una línea resumen `[Lambda][end] MÉTODO /ruta estado (ms)` (magenta), incluidos los errores. Con `--scheduler`, además imprime logs de ciclo de vida: cada schedule recibido (nombre, ARN del destino, hora de disparo en UTC más la zona declarada, estado, acción al finalizar y configuración de reintentos), cuándo se dispara y cuándo se entrega, cancela o expira. Nunca se registra `Target.Input` ni credenciales.
+
 ### Resolver referencias a recursos
 
 En Serverless, `Ref`, `Fn::GetAtt` y `Fn::Sub` del entorno soportan identidades Lambda registradas y roles IAM declarados localmente. Ejemplo:
@@ -237,7 +242,7 @@ functions:
 
 Los IDs lógicos generados de Serverless convierten `-` en `Dash` y `_` en `Underscore`, ponen la primera letra en mayúscula y añaden `LambdaFunction`. El nombre utiliza `name` explícito o `${service}-${stage}-${key}`. SAM utiliza `FunctionName` o `${service}-${logicalId}`, admite handlers sin HTTP y `CodeUri`. Los ARN locales Lambda/IAM consideran las particiones comercial, China y GovCloud; la cuenta predeterminada es `123456789012`. Los nombres y paths de roles IAM locales deben ser cadenas escalares. No se despliegan recursos.
 
-`--cf-stack` consulta `DescribeStacks` y `ListStackResources` paginado con perfil/región configurados, una vez por carga. Expone parámetros y valores Ref soportados (Lambda, rol IAM, S3, DynamoDB, SQS, SNS). Los outputs se acceden con `!Ref Outputs.OutputKey` o `${Outputs.OutputKey}` dentro de `!Sub` (extensión de FreeSLS). El identificador físico **no** es cualquier atributo GetAtt: para un ARN de rol desplegado, expón un output o usa `--cf-value SchedulerRole.Arn=...` incluyendo su path real. Los errores de consulta no se convierten silenciosamente en mocks.
+`--cf-stack` consulta `DescribeStacks` y `ListStackResources` paginado con perfil/región configurados, una vez por carga. Expone parámetros y valores Ref soportados (Lambda, rol IAM, S3, DynamoDB, SQS, SNS). Los outputs se acceden con `!Ref Outputs.OutputKey` o `${Outputs.OutputKey}` dentro de `!Sub` (extensión de FreeSLS). El identificador físico **no** es cualquier atributo GetAtt: para un ARN de rol desplegado, expón un output o usa `--cf-value SchedulerRole.Arn=...` incluyendo su path real. Los errores de consulta no se convierten silenciosamente en mocks; los fallos de credenciales/SSO indican `aws sso login --profile <perfil>`.
 
 Los valores explícitos de `--cf-value` tienen prioridad sobre consultas y valores locales. Las Lambdas del proyecto siempre se ejecutan localmente. El modo HTTP tradicional de Serverless conserva referencias directas Ref/GetAtt no soportadas como cadenas vacías por compatibilidad; `--scheduler`, `--cf-stack` o `--cf-value` activan errores estrictos. Los mappings Sub no soportados siempre fallan explícitamente. El contenido SSM es un dato terminal, no otra expresión de configuración. SAM sigue siendo experimental para los demás tipos de recursos CloudFormation.
 
@@ -389,6 +394,7 @@ provider:
 ### Límites de Ejecución Local
 
 - Las invocaciones se ejecutan secuencialmente en el mismo proceso de Node.js para que las variables de entorno no se solapen. La carga del handler ocurre dentro de ese ámbito y los mapas de fuentes (source maps) permanecen activos para depuración.
+- Los módulos transformados comparten una caché normalizada por nombre de archivo dentro de cada invocación, incluidos los imports circulares a través de alias y rutas relativas en Windows. La caché se descarta entre invocaciones para recargar los cambios de código y los entornos de ruta. Los ciclos que usan una exportación antes de que se inicialice aún pueden fallar; FreeSLS no reproduce la semántica de empaquetado (bundling) de esbuild ni ejecuta los plugins de build de Serverless.
 - Los módulos nativos de JavaScript y sus dependencias pueden retener las variables de entorno de su primera importación debido a la caché de módulos. Las funciones que comparten dichos módulos no disponen de entornos de ejecución aislados e independientes. Reinicia FreeSLS tras modificar la configuración.
 - El reloj de 30 segundos de tiempo restante del contexto es informativo y no un límite forzado. Un handler que nunca termine bloqueará las siguientes invocaciones. El trabajo asíncrono en segundo plano no queda aislado y `callbackWaitsForEmptyEventLoop` no fuerza el vaciado del bucle de eventos.
 - Los handlers pueden finalizar mediante un callback, un método de finalización de contexto, una promesa devuelta o un resultado síncrono. Un retorno síncrono `undefined` espera a que el callback o contexto finalicen; la primera finalización en ocurrir determina la respuesta.
