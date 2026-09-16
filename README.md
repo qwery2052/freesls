@@ -17,7 +17,7 @@
 </p>
 
 ```
-   /\_/\   FreeSLS v0.4.0-beta.5  [SLS] / [AWS SAM]
+   /\_/\   FreeSLS v0.4.0-beta.6  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
    > ^ <   ● Service: user-management-api [stage: dev]
 ────────────────────────────────────────────────────────────
@@ -112,23 +112,22 @@ Or add a script to your `package.json`:
 
 ### CLI Flags
 
-| Flag                        | Alias            | Description                                                                     | Default                          |
-| --------------------------- | ---------------- | ------------------------------------------------------------------------------- | -------------------------------- |
-| `--sam`                     | `-sam`           | 🧪 **Experimental:** Uses AWS SAM template (`template.yaml` / `template.yml`)   | `false`                          |
-| `--sls`                     | `-sls`           | Uses Serverless Framework template (`serverless.yml`)                           | `true` (default)                 |
-| `--stage`                   | `-s`             | Target deployment stage (`dev`, `staging`, `prod`)                              | `develop`                        |
-| `--region`                  | `-r`             | AWS region for SSM and Lambda context                                           | `us-east-1`                      |
-| `--port`                    | `-p`             | HTTP port for the local server                                                  | `4000`                           |
-| `--base-path`               | `-b`, `--prefix` | Base path prefix for all endpoints (e.g. `/medical-history-app`)                | `""` (root `/`)                  |
-| `--profile`                 |                  | AWS CLI / AWS SSO profile name                                                  | System environment credentials   |
-| `--param`                   |                  | Custom key=value parameters (injected into `process.env`)                       | `{}`                             |
-| `--no-ssm`                  |                  | Disables AWS SSM queries (uses `ssm.env`, YAML fallbacks, or mocks)             | `false` (queries real AWS SSM)   |
-| `--scheduler`               |                  | Enable the local one-time Lambda Scheduler endpoint                             | `false`                          |
-| `--cf-stack <stack>`        |                  | Read parameters, outputs and resource IDs from an existing CloudFormation stack | Disabled                         |
-| `--cf-value <key=value...>` |                  | Override a reference (for example `SchedulerRole.Arn=arn:...`)                  | None                             |
-| `--show-env`                |                  | Displays full, unmasked environment variables in console                        | `false` (masks sensitive values) |
-| `--debug`                   | `-d`             | Enables verbose lifecycle debug logging with stage timings                      | `false`                          |
-| `--version`                 | `-v`, `-V`       | Displays the installed FreeSLS version                                          |                                  |
+| Flag                        | Alias            | Description                                                                   | Default                          |
+| --------------------------- | ---------------- | ----------------------------------------------------------------------------- | -------------------------------- |
+| `--sam`                     | `-sam`           | 🧪 **Experimental:** Uses AWS SAM template (`template.yaml` / `template.yml`) | `false`                          |
+| `--sls`                     | `-sls`           | Uses Serverless Framework template (`serverless.yml`)                         | `true` (default)                 |
+| `--stage`                   | `-s`             | Target deployment stage (`dev`, `staging`, `prod`)                            | `develop`                        |
+| `--region`                  | `-r`             | AWS region for SSM and Lambda context                                         | `us-east-1`                      |
+| `--port`                    | `-p`             | HTTP port for the local server                                                | `4000`                           |
+| `--base-path`               | `-b`, `--prefix` | Base path prefix for all endpoints (e.g. `/medical-history-app`)              | `""` (root `/`)                  |
+| `--profile`                 |                  | AWS CLI / AWS SSO profile name                                                | System environment credentials   |
+| `--param`                   |                  | Custom key=value parameters (injected into `process.env`)                     | `{}`                             |
+| `--no-ssm`                  |                  | Disables AWS SSM queries (uses `ssm.env`, YAML fallbacks, or mocks)           | `false` (queries real AWS SSM)   |
+| `--scheduler`               |                  | Enable the local one-time Lambda Scheduler endpoint                           | `false`                          |
+| `--cf-value <key=value...>` |                  | Override a reference (for example `SchedulerRole.Arn=arn:...`)                | None                             |
+| `--show-env`                |                  | Displays full, unmasked environment variables in console                      | `false` (masks sensitive values) |
+| `--debug`                   | `-d`             | Enables verbose lifecycle debug logging with stage timings                    | `false`                          |
+| `--version`                 | `-v`, `-V`       | Displays the installed FreeSLS version                                        |                                  |
 
 > [!WARNING]
 > **AWS SAM Mode (`--sam`) is Experimental**
@@ -155,9 +154,6 @@ freesls -s local --no-ssm
 
 # Local Scheduler (application SDK clients still require signing credentials)
 freesls -s local --scheduler --no-ssm
-
-# Local Scheduler with read-only deployed stack lookup and existing AWS credentials
-freesls -s dev --scheduler --cf-stack my-service-dev --profile my-org-dev
 
 # Override an attribute that CloudFormation cannot return directly
 freesls --scheduler --no-ssm --cf-value SchedulerRole.Arn=arn:aws:iam::123456789012:role/team/scheduler
@@ -242,13 +238,13 @@ functions:
 
 Serverless generated logical IDs normalize `-` to `Dash`, `_` to `Underscore`, capitalize the first character and append `LambdaFunction`. Function names use explicit `name` or `${service}-${stage}-${key}`. SAM uses `FunctionName` or `${service}-${logicalId}` and supports non-HTTP handlers and `CodeUri`. Local Lambda/IAM ARNs account for commercial, China and GovCloud partitions; the default account is `123456789012`. Local IAM role names/paths must be scalar strings. No resources are deployed.
 
-`--cf-stack` uses read-only `DescribeStacks` and paginated `ListStackResources` calls with the configured profile/region, once per configuration load. Stack parameters and supported resource Ref values (Lambda, IAM role, S3, DynamoDB, SQS, SNS) become available. Outputs are accessible through `!Ref Outputs.OutputKey` or `${Outputs.OutputKey}` within `!Sub` (a FreeSLS extension). A physical resource ID is **not** an arbitrary GetAtt attribute: for a deployed role ARN, expose an output or use `--cf-value SchedulerRole.Arn=...`, including the real role path. Stack access failures never silently fall back to mocks; credential/SSO failures point to `aws sso login --profile <profile>`.
+References are resolved locally whenever possible: registered Lambdas and declared IAM roles in your template. For anything FreeSLS cannot derive locally (for example a role defined in another stack), provide it explicitly with `--cf-value LogicalId.Attribute=value` or `--cf-value Outputs.OutputKey=value`. A physical resource ID is **not** a GetAtt attribute, so include the real role path when overriding an ARN. `--cf-value` never queries AWS.
 
-Explicit `--cf-value` references override looked-up/local values. Project Lambda targets remain local and are never invoked remotely. Serverless's legacy HTTP-only mode retains blank unsupported direct Ref/GetAtt values for compatibility; enabling `--scheduler`, `--cf-stack` or `--cf-value` makes them strict errors. Unsupported Sub mappings always fail explicitly. SSM contents are terminal data, not additional configuration expressions. SAM remains experimental for other CloudFormation resource types.
+Explicit `--cf-value` references override looked-up/local values. Project Lambda targets remain local and are never invoked remotely. Serverless's legacy HTTP-only mode retains blank unsupported direct Ref/GetAtt values for compatibility; enabling `--scheduler` or `--cf-value` makes them strict errors. Unsupported Sub mappings always fail explicitly. SSM contents are terminal data, not additional configuration expressions. SAM remains experimental for other CloudFormation resource types.
 
 ## 🔒 Offline Mode & SSM Mocks (`--no-ssm`)
 
-When running with `--no-ssm`, FreeSLS **does not query AWS SSM** and resolves `${ssm:/...}` parameters following this priority chain. `--cf-stack` separately enables CloudFormation reads; application SDK calls are independent:
+When running with `--no-ssm`, FreeSLS **does not query AWS SSM** and resolves `${ssm:/...}` parameters following this priority chain. Application SDK calls made by your handlers are independent:
 
 ```
 1. ssm.env file  ──►  2. YAML Fallback  ──►  3. Automatic Safety Mock
@@ -400,7 +396,7 @@ provider:
 - Handlers may complete through a callback, context completion method, returned promise, or synchronous result. A bare synchronous `undefined` return waits for callback/context completion; the first completion wins.
 - REST routes use payload v1. HTTP API routes default to v2, with Serverless `provider.httpApi.payload` and SAM event `PayloadFormatVersion` overrides supported. Binary input is inferred from content type, not from deployed API Gateway binary-media configuration.
 - Local CORS automatically allows any request origin with credentials (including browser `fetch` with `credentials: "include"`), requested headers, and supported HTTP methods. Preflight requests are handled locally. This permissive development policy overrides handler CORS headers, exposes returned custom headers, and varies responses by origin and requested headers. Requests without an origin receive `*` without credentials. It does not emulate deployed API Gateway CORS restrictions.
-- CloudFormation support is partial. Supported `Ref`, `Fn::GetAtt`, and `Fn::Sub` values are resolved locally; unsupported environment intrinsic objects produce explicit errors. Resource identifiers may be mocks, not deployed identifiers.
+- CloudFormation references are resolved locally. Supported `Ref`, `Fn::GetAtt`, and `Fn::Sub` values resolve from your template (or an explicit `--cf-value`); unsupported environment intrinsic objects produce explicit errors. Resource identifiers may be mocks, not deployed identifiers.
 - `--no-ssm` disables FreeSLS SSM queries, not AWS calls made by your handlers. Environment values are masked by default, including values beginning with `mock-`.
 
 To clone and contribute to **FreeSLS**:

@@ -9,7 +9,6 @@ import {
 } from "./types.js";
 import { parseYaml, resolveSSMValues, type ParserOptions } from "./parser.js";
 import { extractSSMPaths, resolveScalarData, awsPartition, localRoleName } from "./resolver.js";
-import { loadStackReferences } from "./cloudformation.js";
 
 export interface SamParameterDefinition {
   Type?: string;
@@ -115,7 +114,6 @@ export interface SamResolutionOptions {
   resources?: Record<string, SamResource>;
   ssmValues?: Map<string, string>;
   references?: Map<string, string>;
-  deployed?: boolean;
   strictReferences?: boolean;
 }
 
@@ -202,7 +200,6 @@ function resolveCloudFormationRef(
   }
 
   // Local resource mocks.
-  if (options.deployed) return null;
   const targetResource = options.resources?.[trimmedRef];
   if (targetResource) {
     const resourceType = targetResource.Type || "";
@@ -289,7 +286,6 @@ function resolveCloudFormationGetAtt(
   ) {
     return `arn:${awsPartition(options.region)}:lambda:${options.region}:${options.references?.get("AWS::AccountId") || "123456789012"}:function:${resolveCloudFormationRef(resourceName, options)}`;
   }
-  if (options.deployed) return null;
 
   if (attributeName === "Arn") {
     switch (resourceType) {
@@ -498,7 +494,7 @@ function resolveSamEnvironmentMap(
     const resolved = rawValue;
     if (resolved !== null && typeof resolved === "object") {
       throw new Error(
-        `Unsupported or unresolved intrinsic/object in environment variable ${variableKey}. Declare a supported local resource or provide --cf-value LogicalId.Attribute=value; --cf-stack enables read-only stack lookup and Outputs.OutputKey references.`,
+        `Unsupported or unresolved intrinsic/object in environment variable ${variableKey}. Declare a supported local resource or provide --cf-value LogicalId.Attribute=value (stack outputs: Outputs.OutputKey).`,
       );
     }
     resolvedEnvironment[variableKey] = String(resolved ?? "");
@@ -602,9 +598,7 @@ export async function loadSamConfig(
 
   const templateResources = initialConfig.Resources || {};
 
-  const references = options.cfStack
-    ? await loadStackReferences(options.cfStack, options.region)
-    : new Map<string, string>();
+  const references = new Map<string, string>();
   for (const [key, value] of Object.entries(options.cfValues || {})) references.set(key, value);
 
   const samOptions = {
@@ -612,8 +606,7 @@ export async function loadSamConfig(
     serviceName,
     resources: templateResources,
     references,
-    deployed: Boolean(options.cfStack),
-    strictReferences: Boolean(options.scheduler || options.cfStack || options.cfValues),
+    strictReferences: Boolean(options.scheduler || options.cfValues),
   };
 
   // Discover SSM paths from parsed data, including explicit substitutions.

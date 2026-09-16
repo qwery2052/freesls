@@ -6,6 +6,7 @@ import test from "node:test";
 import { loadServerlessConfig, parseYaml } from "../dist/parser.js";
 import { loadSamConfig, resolveSamVariables } from "../dist/sam-parser.js";
 import { extractSSMPaths, resolveVariables } from "../dist/resolver.js";
+import { SSMClient } from "@aws-sdk/client-ssm";
 
 const options = { stage: "local", region: "eu-west-1", params: {}, resolveSSM: false };
 
@@ -662,4 +663,33 @@ test("local identities use the resolved service and bounded, distinct generated 
   );
   assert.notEqual(loaded.globalEnv.ROLE_A, loaded.globalEnv.ROLE_B);
   assert.equal(loaded.globalEnv.ROLE_A.split("/").at(-1).length, 64);
+});
+
+test("local resolution mode makes no AWS SSM calls", async t => {
+  let awsCalls = 0;
+  t.mock.method(SSMClient.prototype, "send", async () => {
+    awsCalls++;
+    throw new Error("unexpected SSM call");
+  });
+  const directory = await fixture(t, {
+    "serverless.yml": `service: demo
+provider:
+  environment:
+    VALUE: !Sub "arn:aws:sqs:\${AWS::Region}:\${AWS::AccountId}:queue"
+functions:
+  target:
+    handler: handler.run
+`,
+    "template.yaml": `Description: demo
+Resources:
+  Target:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handler.run
+`,
+  });
+  const localOptions = { stage: "local", region: "eu-west-1", params: {}, resolveSSM: false };
+  await loadServerlessConfig(directory, localOptions);
+  await loadSamConfig(directory, localOptions);
+  assert.equal(awsCalls, 0);
 });

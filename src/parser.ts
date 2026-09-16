@@ -21,7 +21,6 @@ import {
   localRoleName,
   type ResolveContext,
 } from "./resolver.js";
-import { loadStackReferences } from "./cloudformation.js";
 
 const cloudFormationTags = [
   "!Ref",
@@ -76,7 +75,6 @@ export interface ParserOptions {
   params: Record<string, string>;
   resolveSSM?: boolean;
   scheduler?: boolean;
-  cfStack?: string;
   cfValues?: Record<string, string>;
 }
 
@@ -113,7 +111,7 @@ export function resolveEnvironmentVariables(
         }
       }
       throw new Error(
-        `Unsupported intrinsic or object in environment variable ${variableKey}. Use supported Ref/GetAtt/Sub values, declare a local Lambda or IAM role, or supply --cf-value LogicalId.Attribute=value (stack outputs: Outputs.OutputKey). --cf-stack enables read-only stack lookup.`,
+        `Unsupported intrinsic or object in environment variable ${variableKey}. Use supported Ref/GetAtt/Sub values, declare a local Lambda or IAM role, or supply --cf-value LogicalId.Attribute=value (stack outputs: Outputs.OutputKey).`,
       );
     }
     resolvedEnvironment[variableKey] = context
@@ -307,10 +305,8 @@ export async function loadServerlessConfig(
     serviceName,
     params: options.params,
     rawConfig: initialConfig,
-    references: options.cfStack
-      ? await loadStackReferences(options.cfStack, options.region)
-      : new Map(),
-    strictReferences: Boolean(options.scheduler || options.cfStack || options.cfValues),
+    references: new Map(),
+    strictReferences: Boolean(options.scheduler || options.cfValues),
   };
 
   // Discover SSM references in resolved scalar data, never in rewritten YAML.
@@ -372,7 +368,7 @@ export async function loadServerlessConfig(
       Type?: string;
       Properties?: { RoleName?: unknown; Path?: unknown };
     };
-    if (resource.Type !== "AWS::IAM::Role" || options.cfStack) continue;
+    if (resource.Type !== "AWS::IAM::Role") continue;
     const name =
       resource.Properties?.RoleName ??
       localRoleName(`${resolvedServiceName}-${options.stage}`, key);

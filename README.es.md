@@ -17,7 +17,7 @@
 </p>
 
 ```
-   /\_/\   FreeSLS v0.4.0-beta.5  [SLS] / [AWS SAM]
+   /\_/\   FreeSLS v0.4.0-beta.6  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
    > ^ <   ● Service: user-management-api [stage: dev]
 ────────────────────────────────────────────────────────────
@@ -124,7 +124,6 @@ O agregar un script a tu `package.json`:
 | `--param`                     |                  | Parámetros clave=valor (se inyectan a `process.env`)                            | `{}`                             |
 | `--no-ssm`                    |                  | Desactiva consultas a AWS SSM (usa `ssm.env`, fallbacks o mocks)                | `false` (resuelve SSM real)      |
 | `--scheduler`                 |                  | Activa el endpoint Scheduler local para Lambdas y ejecuciones únicas            | `false`                          |
-| `--cf-stack <stack>`          |                  | Lee parámetros, outputs e identificadores de un stack existente                 | Desactivado                      |
 | `--cf-value <clave=valor...>` |                  | Sobrescribe una referencia (por ejemplo `SchedulerRole.Arn=arn:...`)            | Ninguno                          |
 | `--show-env`                  |                  | Muestra los valores de variables sin enmascarar en consola                      | `false` (enmascara secretos)     |
 | `--debug`                     | `-d`             | Activa logs detallados del ciclo de vida con tiempos por etapa                  | `false`                          |
@@ -155,9 +154,6 @@ freesls -s local --no-ssm
 
 # Scheduler local (los clientes SDK de la aplicación requieren credenciales de firma)
 freesls -s local --scheduler --no-ssm
-
-# Scheduler local con consulta de solo lectura a un stack y credenciales existentes
-freesls -s dev --scheduler --cf-stack my-service-dev --profile mi-empresa-dev
 
 # Sobrescribir un atributo que CloudFormation no devuelve directamente
 freesls --scheduler --no-ssm --cf-value SchedulerRole.Arn=arn:aws:iam::123456789012:role/team/scheduler
@@ -242,13 +238,13 @@ functions:
 
 Los IDs lógicos generados de Serverless convierten `-` en `Dash` y `_` en `Underscore`, ponen la primera letra en mayúscula y añaden `LambdaFunction`. El nombre utiliza `name` explícito o `${service}-${stage}-${key}`. SAM utiliza `FunctionName` o `${service}-${logicalId}`, admite handlers sin HTTP y `CodeUri`. Los ARN locales Lambda/IAM consideran las particiones comercial, China y GovCloud; la cuenta predeterminada es `123456789012`. Los nombres y paths de roles IAM locales deben ser cadenas escalares. No se despliegan recursos.
 
-`--cf-stack` consulta `DescribeStacks` y `ListStackResources` paginado con perfil/región configurados, una vez por carga. Expone parámetros y valores Ref soportados (Lambda, rol IAM, S3, DynamoDB, SQS, SNS). Los outputs se acceden con `!Ref Outputs.OutputKey` o `${Outputs.OutputKey}` dentro de `!Sub` (extensión de FreeSLS). El identificador físico **no** es cualquier atributo GetAtt: para un ARN de rol desplegado, expón un output o usa `--cf-value SchedulerRole.Arn=...` incluyendo su path real. Los errores de consulta no se convierten silenciosamente en mocks; los fallos de credenciales/SSO indican `aws sso login --profile <perfil>`.
+Las referencias se resuelven localmente siempre que sea posible: Lambdas registradas y roles IAM declarados en tu plantilla. Para lo que FreeSLS no pueda derivar localmente (por ejemplo un rol definido en otro stack), pásalo explícitamente con `--cf-value LogicalId.Atributo=valor` o `--cf-value Outputs.OutputKey=valor`. Un identificador físico **no** es un atributo GetAtt, así que incluye el path real del rol al sobrescribir un ARN. `--cf-value` nunca consulta AWS.
 
-Los valores explícitos de `--cf-value` tienen prioridad sobre consultas y valores locales. Las Lambdas del proyecto siempre se ejecutan localmente. El modo HTTP tradicional de Serverless conserva referencias directas Ref/GetAtt no soportadas como cadenas vacías por compatibilidad; `--scheduler`, `--cf-stack` o `--cf-value` activan errores estrictos. Los mappings Sub no soportados siempre fallan explícitamente. El contenido SSM es un dato terminal, no otra expresión de configuración. SAM sigue siendo experimental para los demás tipos de recursos CloudFormation.
+Los valores explícitos de `--cf-value` tienen prioridad sobre consultas y valores locales. Las Lambdas del proyecto siempre se ejecutan localmente. El modo HTTP tradicional de Serverless conserva referencias directas Ref/GetAtt no soportadas como cadenas vacías por compatibilidad; `--scheduler` o `--cf-value` activan errores estrictos. Los mappings Sub no soportados siempre fallan explícitamente. El contenido SSM es un dato terminal, no otra expresión de configuración. SAM sigue siendo experimental para los demás tipos de recursos CloudFormation.
 
 ## 🔒 Modo Offline y Mocks de SSM (`--no-ssm`)
 
-Cuando ejecutas con `--no-ssm`, FreeSLS **no consulta AWS SSM** y resuelve `${ssm:/...}` siguiendo este orden de prioridad. `--cf-stack` habilita por separado consultas a CloudFormation; las llamadas SDK de la aplicación son independientes:
+Cuando ejecutas con `--no-ssm`, FreeSLS **no consulta AWS SSM** y resuelve `${ssm:/...}` siguiendo este orden de prioridad. Las llamadas SDK que hagan tus handlers son independientes:
 
 ```
 1. Archivo ssm.env  ──►  2. Fallback en YAML  ──►  3. Mock automático de seguridad
@@ -400,7 +396,7 @@ provider:
 - Los handlers pueden finalizar mediante un callback, un método de finalización de contexto, una promesa devuelta o un resultado síncrono. Un retorno síncrono `undefined` espera a que el callback o contexto finalicen; la primera finalización en ocurrir determina la respuesta.
 - Las rutas REST usan payload v1. Las rutas HTTP API usan por defecto v2, con soporte para anulaciones mediante `provider.httpApi.payload` en Serverless o `PayloadFormatVersion` en eventos SAM. La entrada binaria se infiere del tipo de contenido (Content-Type) y no de la configuración de tipos binarios de API Gateway en AWS.
 - El CORS local permite automáticamente cualquier origen con credenciales (incluido `fetch` con `credentials: "include"`), los headers solicitados y los métodos HTTP soportados. Las peticiones preflight se resuelven localmente. Esta política permisiva de desarrollo reemplaza los headers CORS del handler, expone los headers personalizados devueltos y diferencia las respuestas por origen y headers solicitados. Las peticiones sin origen reciben `*` sin credenciales. No emula las restricciones CORS de API Gateway desplegado.
-- El soporte para CloudFormation es parcial. Los valores compatibles de `Ref`, `Fn::GetAtt` y `Fn::Sub` se resuelven en local; los objetos intrínsecos de entorno no soportados generan errores explícitos. Los identificadores de recursos pueden ser simulados (mocks) y no los identificadores desplegados en AWS.
+- Las referencias de CloudFormation se resuelven en local. Los valores compatibles de `Ref`, `Fn::GetAtt` y `Fn::Sub` se resuelven desde tu plantilla (o con `--cf-value` explícito); los objetos intrínsecos de entorno no soportados generan errores explícitos. Los identificadores de recursos pueden ser simulados (mocks) y no los identificadores desplegados en AWS.
 - `--no-ssm` desactiva las consultas de FreeSLS a SSM, no las llamadas a AWS que hagan tus propios handlers. Los valores de variables de entorno se enmascaran por defecto, incluidos aquellos que comiencen con `mock-`.
 
 Si deseas clonar y contribuir a **FreeSLS**:

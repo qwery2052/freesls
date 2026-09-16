@@ -41,7 +41,7 @@ function parseCliParameters(parameterEntries?: string[], flag = "--param"): Reco
 program
   .name("freesls")
   .description("Offline API Gateway & Lambda Runner (Serverless Framework & AWS SAM)")
-  .version("0.4.0-beta.5", "-v, --version", "Output the current version number")
+  .version("0.4.0-beta.6", "-v, --version", "Output the current version number")
   .option("-s, --stage <stage>", "Deployment stage", "develop")
   .option("-r, --region <region>", "AWS region", "us-east-1")
   .option("-p, --port <port>", "Local HTTP server port", "4000")
@@ -56,7 +56,6 @@ program
   .option("--sls", "Use Serverless Framework (serverless.yml) [default]")
   .option("--no-ssm", "Disable AWS SSM queries and use local fallbacks or mocks")
   .option("--scheduler", "Enable the local one-time Lambda Scheduler endpoint")
-  .option("--cf-stack <stack>", "Read references from an existing CloudFormation stack")
   .option(
     "--cf-value <values...>",
     "Explicit reference values: LogicalId.Attribute=value or Outputs.Key=value",
@@ -116,7 +115,6 @@ program
         params: customParameters,
         resolveSSM: commandOptions.ssm !== false,
         scheduler: Boolean(commandOptions.scheduler),
-        cfStack: commandOptions.cfStack,
         cfValues: commandOptions.cfValue
           ? parseCliParameters(commandOptions.cfValue, "--cf-value")
           : undefined,
