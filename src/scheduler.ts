@@ -31,6 +31,18 @@ function choice(value: unknown, choices: string[], field: string, fallback: stri
   return value;
 }
 
+/** Sort recursively so HTTP JSON property ordering does not affect idempotency. */
+function canonicalize(value: unknown): unknown {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? Object.fromEntries(
+        Object.entries(value)
+          .filter(([key]) => key !== "ClientToken")
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([key, item]) => [key, canonicalize(item)]),
+      )
+    : value;
+}
+
 /** Interpret wall-clock dates independently of the host timezone. Reject DST ambiguity explicitly. */
 export function scheduleInstant(expression: unknown, timezone: unknown = "UTC"): number {
   if (
@@ -95,7 +107,7 @@ const realClock: SchedulerClock = {
   clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
 export interface SchedulerEvent {
-  type: "received" | "firing" | "delivered" | "cancelled" | "expired" | "failed";
+  type: "received" | "updated" | "firing" | "delivered" | "cancelled" | "expired" | "failed";
   name: string;
   target: string;
   due?: number;
@@ -110,6 +122,7 @@ interface Schedule {
   body: Record<string, unknown>;
   arn: string;
   created: number;
+  modified: number;
   due: number;
   payload: unknown;
   target: string;
@@ -140,10 +153,8 @@ export class LocalScheduler {
       invalid("Only GroupName default is supported. Omit GroupName or use default.");
   }
 
-  create(name: string, input: unknown): { ScheduleArn: string } {
-    if (this.closed)
-      throw new SchedulerError("InternalServerException", "Local Scheduler is shutting down.", 500);
-    const body = structuredClone(object(input, "CreateSchedule"));
+  private parse(name: string, input: unknown, operation: string) {
+    const body = structuredClone(object(input, operation));
     fields(
       body,
       [
@@ -158,7 +169,7 @@ export class LocalScheduler {
         "State",
         "Target",
       ],
-      "CreateSchedule",
+      operation,
     );
     this.identity(name, body.GroupName);
     if (body.Name !== undefined && body.Name !== name) invalid("Name must match the request path.");
@@ -199,22 +210,18 @@ export class LocalScheduler {
         "Target.RoleArn must be an IAM role ARN. Declare a local IAM role or provide --cf-value LogicalId.Arn=value. IAM authorization is not emulated.",
       );
     let payload: unknown;
-    {
-      if (typeof target.Input !== "string" || Buffer.byteLength(target.Input) > 262144)
-        invalid(
-          "Target.Input must be an explicit JSON string of at most 262144 bytes. Use '{}' for an empty event; the AWS default notification is not emulated.",
-        );
-      if (target.Input.includes("<aws.scheduler."))
-        invalid(
-          "Scheduler context placeholders in Target.Input are not supported locally. Supply explicit JSON values.",
-        );
-      try {
-        payload = JSON.parse(target.Input);
-      } catch {
-        invalid(
-          "Target.Input must contain valid JSON; its contents are not included in this error.",
-        );
-      }
+    if (typeof target.Input !== "string" || Buffer.byteLength(target.Input) > 262144)
+      invalid(
+        "Target.Input must be an explicit JSON string of at most 262144 bytes. Use '{}' for an empty event; the AWS default notification is not emulated.",
+      );
+    if (target.Input.includes("<aws.scheduler."))
+      invalid(
+        "Scheduler context placeholders in Target.Input are not supported locally. Supply explicit JSON values.",
+      );
+    try {
+      payload = JSON.parse(target.Input);
+    } catch {
+      invalid("Target.Input must contain valid JSON; its contents are not included in this error.");
     }
     const retry = target.RetryPolicy === undefined ? {} : object(target.RetryPolicy, "RetryPolicy");
     fields(retry, ["MaximumRetryAttempts", "MaximumEventAgeInSeconds"], "RetryPolicy");
@@ -234,17 +241,26 @@ export class LocalScheduler {
     body.GroupName = "default";
     body.ScheduleExpressionTimezone ??= "UTC";
     const due = scheduleInstant(body.ScheduleExpression, body.ScheduleExpressionTimezone);
-    // Sort recursively so HTTP JSON property ordering does not affect idempotency.
-    const canonical = (value: unknown): unknown =>
-      value && typeof value === "object" && !Array.isArray(value)
-        ? Object.fromEntries(
-            Object.entries(value)
-              .filter(([key]) => key !== "ClientToken")
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([key, item]) => [key, canonical(item)]),
-          )
-        : value;
-    const fingerprint = JSON.stringify([name, canonical(body)]);
+    return {
+      body,
+      token,
+      targetArn: target.Arn,
+      payload,
+      retries: Number(retries),
+      age: Number(age),
+      due,
+    };
+  }
+
+  create(name: string, input: unknown): { ScheduleArn: string } {
+    if (this.closed)
+      throw new SchedulerError("InternalServerException", "Local Scheduler is shutting down.", 500);
+    const { body, token, targetArn, payload, retries, age, due } = this.parse(
+      name,
+      input,
+      "CreateSchedule",
+    );
+    const fingerprint = JSON.stringify(["create", name, canonicalize(body)]);
     // AWS idempotency replays the original response for the same token even if the
     // schedule was later deleted: the token is not invalidated by DeleteSchedule.
     // Tokens are session-scoped; AWS documents a 24h / resource-lifetime-plus-one-hour window.
@@ -269,15 +285,17 @@ export class LocalScheduler {
         "Local one-time schedules must be in the future. Check the date and ScheduleExpressionTimezone.",
       );
     const arn = `arn:${awsPartition(this.region)}:scheduler:${this.region}:123456789012:schedule/default/${name}`;
+    const now = this.clock.now();
     const schedule: Schedule = {
       body,
       arn,
-      created: this.clock.now(),
+      created: now,
+      modified: now,
       due,
       payload,
-      target: target.Arn,
-      retries: Number(retries),
-      maxAge: Number(age) * 1000,
+      target: targetArn,
+      retries,
+      maxAge: age * 1000,
       attempts: 0,
     };
     this.schedules.set(name, schedule);
@@ -286,15 +304,76 @@ export class LocalScheduler {
     this.log({
       type: "received",
       name,
-      target: target.Arn,
+      target: targetArn,
       due,
       timezone: String(body.ScheduleExpressionTimezone),
       state: String(body.State),
       action: String(body.ActionAfterCompletion),
-      retries: Number(retries),
-      maxAgeSeconds: Number(age),
+      retries,
+      maxAgeSeconds: age,
     });
     return { ScheduleArn: arn };
+  }
+
+  update(name: string, input: unknown): { ScheduleArn: string } {
+    if (this.closed)
+      throw new SchedulerError("InternalServerException", "Local Scheduler is shutting down.", 500);
+    const existing = this.schedules.get(name);
+    if (!existing)
+      throw new SchedulerError(
+        "ResourceNotFoundException",
+        "Schedule does not exist in this local session.",
+        404,
+      );
+    const { body, token, targetArn, payload, retries, age, due } = this.parse(
+      name,
+      input,
+      "UpdateSchedule",
+    );
+    const fingerprint = JSON.stringify(["update", name, canonicalize(body)]);
+    if (typeof token === "string" && this.tokens.has(token)) {
+      const prior = this.tokens.get(token)!;
+      if (prior.fingerprint !== fingerprint)
+        throw new SchedulerError(
+          "ConflictException",
+          "ClientToken was already used with different schedule parameters.",
+          409,
+        );
+      return { ScheduleArn: prior.arn };
+    }
+    if (due <= this.clock.now())
+      invalid(
+        "Local one-time schedules must be in the future. Check the date and ScheduleExpressionTimezone.",
+      );
+    if (existing.timer !== undefined) this.clock.clearTimeout(existing.timer);
+    const now = this.clock.now();
+    const schedule: Schedule = {
+      body,
+      arn: existing.arn,
+      created: existing.created,
+      modified: now,
+      due,
+      payload,
+      target: targetArn,
+      retries,
+      maxAge: age * 1000,
+      attempts: 0,
+    };
+    this.schedules.set(name, schedule);
+    if (typeof token === "string") this.tokens.set(token, { fingerprint, arn: existing.arn });
+    if (body.State === "ENABLED") this.arm(name, schedule, due);
+    this.log({
+      type: "updated",
+      name,
+      target: targetArn,
+      due,
+      timezone: String(body.ScheduleExpressionTimezone),
+      state: String(body.State),
+      action: String(body.ActionAfterCompletion),
+      retries,
+      maxAgeSeconds: age,
+    });
+    return { ScheduleArn: existing.arn };
   }
 
   get(name: string, group?: unknown): Record<string, unknown> {
@@ -312,7 +391,7 @@ export class LocalScheduler {
       Name: name,
       Arn: s.arn,
       CreationDate: s.created / 1000,
-      LastModificationDate: s.created / 1000,
+      LastModificationDate: s.modified / 1000,
     });
   }
 
@@ -411,6 +490,7 @@ export async function startScheduler(
         "query",
       );
       if (req.method === "POST") res.json(scheduler.create(String(req.params.name), req.body));
+      else if (req.method === "PUT") res.json(scheduler.update(String(req.params.name), req.body));
       else if (req.method === "GET")
         res.json(scheduler.get(String(req.params.name), req.query.groupName));
       else if (req.method === "DELETE") {
@@ -418,7 +498,7 @@ export async function startScheduler(
         res.json({});
       } else
         invalid(
-          "Supported operations: CreateSchedule (POST), GetSchedule (GET), DeleteSchedule (DELETE). UpdateSchedule is not supported.",
+          "Supported operations: CreateSchedule (POST), GetSchedule (GET), UpdateSchedule (PUT), DeleteSchedule (DELETE).",
         );
     } catch (error) {
       next(error);

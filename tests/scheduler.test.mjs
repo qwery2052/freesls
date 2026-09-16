@@ -8,6 +8,7 @@ import {
   SchedulerClient,
   CreateScheduleCommand,
   GetScheduleCommand,
+  UpdateScheduleCommand,
   DeleteScheduleCommand,
 } from "@aws-sdk/client-scheduler";
 import { LocalScheduler, scheduleInstant, startScheduler } from "../dist/scheduler.js";
@@ -362,4 +363,105 @@ test("scheduler emits lifecycle log events without leaking the payload", async (
   assert.ok(!serialized.includes("campaignId"));
   assert.ok(!serialized.includes("example"));
   scheduler.close();
+});
+
+test("update replaces the schedule and re-arms to the new instant", async () => {
+  const clock = new Clock();
+  const delivered = [];
+  const events = [];
+  const scheduler = new LocalScheduler(
+    "us-east-1",
+    new Set([arn]),
+    async (target, input) => {
+      delivered.push([target, input]);
+    },
+    clock,
+    () => {},
+    event => events.push(event.type),
+  );
+
+  scheduler.create("campaign", { ...base(), ScheduleExpression: "at(2030-01-01T10:00:00)" });
+  const updatedArn = scheduler.update("campaign", {
+    ...base(),
+    ScheduleExpression: "at(2030-01-01T12:00:00)",
+    Target: { ...base().Target, Input: '{"rescheduled":true}' },
+  }).ScheduleArn;
+  assert.equal(updatedArn, "arn:aws:scheduler:us-east-1:123456789012:schedule/default/campaign");
+
+  const stored = scheduler.get("campaign");
+  assert.equal(stored.ScheduleExpression, "at(2030-01-01T12:00:00)");
+  assert.equal(stored.Target.Input, '{"rescheduled":true}');
+
+  await clock.advance(Date.parse("2030-01-01T15:00:00Z")); // old instant (10:00 Bogota)
+  assert.equal(delivered.length, 0);
+  await clock.advance(Date.parse("2030-01-01T17:00:00Z")); // new instant (12:00 Bogota)
+  assert.deepEqual(delivered, [[arn, { rescheduled: true }]]);
+  assert.throws(() => scheduler.get("campaign"), /does not exist/);
+  assert.ok(events.includes("updated"));
+  scheduler.close();
+});
+
+test("update fails for unknown schedules and past dates, with idempotent tokens", () => {
+  const scheduler = new LocalScheduler("us-east-1", new Set([arn]), async () => {}, new Clock());
+  assert.throws(
+    () => scheduler.update("missing", base()),
+    error => error.code === "ResourceNotFoundException",
+  );
+
+  scheduler.create("existing", base());
+  assert.throws(
+    () =>
+      scheduler.update("existing", { ...base(), ScheduleExpression: "at(2020-01-01T00:00:00)" }),
+    error => error.code === "ValidationException",
+  );
+
+  const token = {
+    ...base(),
+    ClientToken: "update-token",
+    ScheduleExpression: "at(2031-01-01T00:00:00)",
+  };
+  const first = scheduler.update("existing", token);
+  assert.equal(scheduler.update("existing", token).ScheduleArn, first.ScheduleArn);
+  assert.throws(
+    () => scheduler.update("existing", { ...token, ScheduleExpression: "at(2031-02-01T00:00:00)" }),
+    error => error.code === "ConflictException",
+  );
+  scheduler.close();
+});
+
+test("SDK UpdateSchedule changes the date and updates LastModificationDate", async t => {
+  const clock = new Clock();
+  const scheduler = new LocalScheduler("us-east-1", new Set([arn]), async () => {}, clock);
+  const server = await startScheduler(scheduler);
+  const previous = process.env.AWS_ENDPOINT_URL_SCHEDULER;
+  process.env.AWS_ENDPOINT_URL_SCHEDULER = server.endpoint;
+  const client = new SchedulerClient({
+    region: "us-east-1",
+    credentials: { accessKeyId: "local", secretAccessKey: "local" },
+    maxAttempts: 1,
+  });
+  t.after(async () => {
+    client.destroy();
+    await server.close();
+    if (previous === undefined) delete process.env.AWS_ENDPOINT_URL_SCHEDULER;
+    else process.env.AWS_ENDPOINT_URL_SCHEDULER = previous;
+  });
+
+  const created = await client.send(new CreateScheduleCommand({ ...base(), Name: "resched" }));
+  clock.time += 5000;
+  await client.send(
+    new UpdateScheduleCommand({
+      Name: "resched",
+      ScheduleExpression: "at(2030-01-01T12:00:00)",
+      ScheduleExpressionTimezone: "America/Bogota",
+      FlexibleTimeWindow: { Mode: "OFF" },
+      ActionAfterCompletion: "DELETE",
+      Target: base().Target,
+    }),
+  );
+  const stored = await client.send(new GetScheduleCommand({ Name: "resched" }));
+  assert.equal(stored.ScheduleExpression, "at(2030-01-01T12:00:00)");
+  assert.equal(stored.Arn, created.ScheduleArn);
+  assert.ok(stored.LastModificationDate instanceof Date);
+  assert.ok(stored.LastModificationDate.getTime() > stored.CreationDate.getTime());
 });

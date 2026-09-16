@@ -77,7 +77,7 @@ export function printBanner(
   const shinyBadge = shiny ? `  ${pc.bold(pc.bgYellow(pc.black(" ✨ SHINY ")))}` : "";
 
   const bannerArt = `
-   ${pc[colors[0]]("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.4.0-beta.7")}  ${frameworkBadge}${debugBadge}${shinyBadge}
+   ${pc[colors[0]]("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.4.0-beta.8")}  ${frameworkBadge}${debugBadge}${shinyBadge}
   ${pc[colors[1]]("( o.o )")}  ${pc.dim("Offline API Gateway & Lambda Runner")}
    ${pc[colors[2]]("> ^ <")}   ${pc.green("●")} Service: ${pc.bold(serviceName)} ${pc.dim(`[stage: ${stage}]`)}
   `;
@@ -242,6 +242,16 @@ export function printSchedulerEvent(
       console.log(
         `   ${pc.dim("└─ actions:")} ${pc.white(event.state ?? "ENABLED")} ${pc.dim("· after run")} ${pc.white(event.action ?? "NONE")} ${pc.dim("· retries")} ${pc.white(String(event.retries ?? 0))} ${pc.dim("· max age")} ${pc.white(`${event.maxAgeSeconds ?? 0}s`)}`,
       );
+      break;
+    }
+    case "updated": {
+      const dueText = event.due
+        ? `${new Date(event.due).toISOString()} (${event.timezone ?? "UTC"})`
+        : "unknown";
+      console.log(
+        `\n${face} ${pc.bold(pc.cyan("[Scheduler]"))} Schedule updated ${pc.bold(event.name)} ${pc.dim("→")} ${pc.yellow(targetName)}`,
+      );
+      console.log(`   ${pc.dim("└─ fires: ")} ${pc.white(dueText)}`);
       break;
     }
     case "firing":

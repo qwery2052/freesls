@@ -17,7 +17,7 @@
 </p>
 
 ```
-   /\_/\   FreeSLS v0.4.0-beta.7  [SLS] / [AWS SAM]
+   /\_/\   FreeSLS v0.4.0-beta.8  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
    > ^ <   ● Service: example-service [stage: dev]
 ────────────────────────────────────────────────────────────
@@ -291,7 +291,7 @@ freesls -s dev --debug
 
 `--scheduler` emula EventBridge **Scheduler** para schedules puntuales `at(...)`. No emula el bus de eventos (`PutEvents`) ni las reglas `schedule: cron(...)`.
 
-**Operaciones:** `CreateSchedule`, `GetSchedule`, `DeleteSchedule` (solo grupo `default`). `UpdateSchedule` **no** está soportado.
+**Operaciones:** `CreateSchedule`, `GetSchedule`, `UpdateSchedule`, `DeleteSchedule` (solo grupo `default`).
 
 ### Cómo funciona, paso a paso
 
@@ -366,6 +366,36 @@ Local Scheduler: http://127.0.0.1:50000 (at schedules, in-memory)…
 😻 [Scheduler] Delivered example-job · schedule processed
 ```
 
+### Reprogramar o cancelar
+
+`UpdateSchedule` cambia un schedule existente en el sitio (mismo `Name`/ARN). Es un **reemplazo total**: reenvía todos los campos que quieras conservar, porque los opcionales omitidos vuelven a su valor por defecto (`ActionAfterCompletion` a `NONE`, `State` a `ENABLED`, etc.). Haz `GetSchedule` primero para leer los valores actuales.
+
+```ts
+await scheduler.send(
+  new UpdateScheduleCommand({
+    Name: "example-job",
+    ScheduleExpression: "at(2030-02-01T10:00:00)", // nueva fecha
+    ScheduleExpressionTimezone: "America/Bogota",
+    FlexibleTimeWindow: { Mode: "OFF" },
+    ActionAfterCompletion: "DELETE",
+    State: "ENABLED",
+    Target: {
+      Arn: process.env.TARGET_ARN,
+      RoleArn: process.env.SCHEDULER_ROLE_ARN,
+      Input: JSON.stringify({ example: true }),
+    },
+  }),
+);
+```
+
+`DeleteSchedule` lo cancela:
+
+```ts
+await scheduler.send(new DeleteScheduleCommand({ Name: "example-job" }));
+```
+
+Ambas operaciones usan el `Name` del schedule (más `GroupName`, `default` en local). La consola imprime `[Scheduler] Schedule updated …` o `[Scheduler] Schedule cancelled …`.
+
 ### Credenciales
 
 El SDK de Scheduler firma cada petición, así que necesita credenciales de AWS. Si usas SSO, ejecuta `aws sso login --profile <perfil>` y listo; FreeSLS preserva tus credenciales existentes. En una app exclusivamente local sin credenciales, pon unas ficticias (`AWS_ACCESS_KEY_ID=local`, `AWS_SECRET_ACCESS_KEY=local`).
@@ -380,7 +410,7 @@ El SDK de Scheduler firma cada petición, así que necesita credenciales de AWS.
 
 | Soportado    | Contrato                                                                                                                         |
 | ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| Operaciones  | `CreateSchedule`, `GetSchedule`, `DeleteSchedule`; solo grupo `default`                                                          |
+| Operaciones  | `CreateSchedule`, `GetSchedule`, `UpdateSchedule`, `DeleteSchedule`; solo grupo `default`                                        |
 | Fechas       | Fechas futuras `at(...)`; zonas IANA disponibles en ICU de Node, UTC por defecto                                                 |
 | Destinos     | ARN exacto de Lambdas registradas del proyecto, incluidas funciones sin eventos HTTP                                             |
 | Input        | JSON explícito válido de hasta 256 KB, entregado directamente al handler; usa `'{}'` para un evento vacío                        |
