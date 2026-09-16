@@ -89,6 +89,27 @@ test("CloudFormation errors do not silently fall back or expose server response 
   assert.equal(destroyed, true);
 });
 
+test("CloudFormation credential/SSO failures point to aws sso login", async t => {
+  const previousProfile = process.env.AWS_PROFILE;
+  process.env.AWS_PROFILE = "sso-test";
+  t.after(() => {
+    if (previousProfile === undefined) delete process.env.AWS_PROFILE;
+    else process.env.AWS_PROFILE = previousProfile;
+  });
+  t.mock.method(CloudFormationClient.prototype, "send", async () => {
+    throw Object.assign(new Error("SSO session associated with this profile has expired"), {
+      name: "CredentialsProviderError",
+    });
+  });
+  await assert.rejects(
+    loadStackReferences("stack", "us-east-1"),
+    e =>
+      /CloudFormation lookup failed \(CredentialsProviderError\)/.test(e.message) &&
+      /aws sso login --profile sso-test/.test(e.message) &&
+      !e.message.includes("expired"),
+  );
+});
+
 test("both parsers use stack outputs and explicit role attributes while keeping Lambda targets local", async t => {
   const env = { ...process.env };
   const directory = await mkdtemp(path.join(tmpdir(), "freesls-stack-"));

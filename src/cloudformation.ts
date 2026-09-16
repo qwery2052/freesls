@@ -50,8 +50,17 @@ export async function loadStackReferences(
     return references;
   } catch (error) {
     const code = error instanceof Error ? error.name : "UnknownError";
+    const profile = process.env.AWS_PROFILE || "default";
+    const isCredentialError =
+      error instanceof Error &&
+      (error.name === "CredentialsProviderError" ||
+        error.message.includes("SSO") ||
+        error.message.toLowerCase().includes("credential"));
+    const loginHint = isCredentialError
+      ? ` AWS credentials or SSO could not be resolved; run: aws sso login --profile ${profile}.`
+      : "";
     throw new Error(
-      `CloudFormation lookup failed (${code}). Check --cf-stack, --region and --profile; read access requires DescribeStacks and ListStackResources. No local fallback was applied.`,
+      `CloudFormation lookup failed (${code}). Check --cf-stack, --region and --profile; read access requires DescribeStacks and ListStackResources.${loginHint} No local fallback was applied.`,
       { cause: error },
     );
   } finally {
