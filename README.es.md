@@ -17,9 +17,9 @@
 </p>
 
 ```
-   /\_/\   FreeSLS v0.4.0-beta.6  [SLS] / [AWS SAM]
+   /\_/\   FreeSLS v0.4.0-beta.7  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
-   > ^ <   ● Service: user-management-api [stage: dev]
+   > ^ <   ● Service: example-service [stage: dev]
 ────────────────────────────────────────────────────────────
  Local Endpoint: http://localhost:4000
 ────────────────────────────────────────────────────────────
@@ -112,27 +112,144 @@ O agregar un script a tu `package.json`:
 
 ### Opciones de CLI
 
-| Opción                        | Alias            | Descripción                                                                     | Valor por Defecto                |
-| ----------------------------- | ---------------- | ------------------------------------------------------------------------------- | -------------------------------- |
-| `--sam`                       | `-sam`           | 🧪 **Experimental:** Usa template de AWS SAM (`template.yaml` / `template.yml`) | `false`                          |
-| `--sls`                       | `-sls`           | Usa template de Serverless Framework (`serverless.yml`)                         | `true` (por defecto)             |
-| `--stage`                     | `-s`             | Stage de despliegue (`dev`, `staging`, `prod`)                                  | `develop`                        |
-| `--region`                    | `-r`             | Región de AWS para SSM y contexto Lambda                                        | `us-east-1`                      |
-| `--port`                      | `-p`             | Puerto HTTP para el servidor local                                              | `4000`                           |
-| `--base-path`                 | `-b`, `--prefix` | Prefijo de ruta base para todos los endpoints (ej. `/medical-history-app`)      | `""` (raíz `/`)                  |
-| `--profile`                   |                  | Perfil de AWS CLI / AWS SSO                                                     | Variables de entorno del sistema |
-| `--param`                     |                  | Parámetros clave=valor (se inyectan a `process.env`)                            | `{}`                             |
-| `--no-ssm`                    |                  | Desactiva consultas a AWS SSM (usa `ssm.env`, fallbacks o mocks)                | `false` (resuelve SSM real)      |
-| `--scheduler`                 |                  | Activa el endpoint Scheduler local para Lambdas y ejecuciones únicas            | `false`                          |
-| `--cf-value <clave=valor...>` |                  | Sobrescribe una referencia (por ejemplo `SchedulerRole.Arn=arn:...`)            | Ninguno                          |
-| `--show-env`                  |                  | Muestra los valores de variables sin enmascarar en consola                      | `false` (enmascara secretos)     |
-| `--debug`                     | `-d`             | Activa logs detallados del ciclo de vida con tiempos por etapa                  | `false`                          |
-| `--version`                   | `-v`, `-V`       | Muestra la versión actual instalada                                             |                                  |
+| Opción                                       | Alias            | Descripción                                                                     | Valor por Defecto                |
+| -------------------------------------------- | ---------------- | ------------------------------------------------------------------------------- | -------------------------------- |
+| [`--sam`](#--sam)                            | `-sam`           | 🧪 **Experimental:** Usa template de AWS SAM (`template.yaml` / `template.yml`) | `false`                          |
+| [`--sls`](#--sls)                            | `-sls`           | Usa template de Serverless Framework (`serverless.yml`)                         | `true` (por defecto)             |
+| [`--stage`](#--stage)                        | `-s`             | Stage de despliegue (`dev`, `staging`, `prod`)                                  | `develop`                        |
+| [`--region`](#--region)                      | `-r`             | Región de AWS para SSM y contexto Lambda                                        | `us-east-1`                      |
+| [`--port`](#--port)                          | `-p`             | Puerto HTTP para el servidor local                                              | `4000`                           |
+| [`--base-path`](#--base-path)                | `-b`, `--prefix` | Prefijo de ruta base para todos los endpoints (ej. `/example-base-path`)        | `""` (raíz `/`)                  |
+| [`--profile`](#--profile)                    |                  | Perfil de AWS CLI / AWS SSO                                                     | Variables de entorno del sistema |
+| [`--param`](#--param)                        |                  | Parámetros clave=valor (se inyectan a `process.env`)                            | `{}`                             |
+| [`--no-ssm`](#--no-ssm)                      |                  | Desactiva consultas a AWS SSM (usa `ssm.env`, fallbacks o mocks)                | `false` (resuelve SSM real)      |
+| [`--scheduler`](#--scheduler)                |                  | Activa el endpoint Scheduler local para Lambdas y ejecuciones únicas            | `false`                          |
+| [`--cf-value <clave=valor...>`](#--cf-value) |                  | Sobrescribe una referencia (por ejemplo `ExampleRole.Arn=arn:...`)              | Ninguno                          |
+| [`--show-env`](#--show-env)                  |                  | Muestra los valores de variables sin enmascarar en consola                      | `false` (enmascara secretos)     |
+| [`--debug`](#--debug)                        | `-d`             | Activa logs detallados del ciclo de vida con tiempos por etapa                  | `false`                          |
+| [`--version`](#--version)                    | `-v`, `-V`       | Muestra la versión actual instalada                                             |                                  |
 
 > [!WARNING]
 > **El modo AWS SAM (`--sam`) es Experimental**
 >
 > La emulación para proyectos AWS SAM se encuentra actualmente en fase **beta / experimental**. Se admiten funciones intrínsecas esenciales (`Ref`, `Fn::GetAtt`, `Fn::Sub`) y referencias dinámicas a SSM (`{{resolve:ssm:...}}`). Las características avanzadas de CloudFormation (como `Mappings`, stacks anidados o funciones intrínsecas no implementadas) son aún parciales.
+
+### Referencia de CLI
+
+Uso detallado de cada opción. Los nombres de la tabla de arriba enlazan aquí.
+
+#### `--sls`
+
+Usa el template de Serverless Framework (`serverless.yml`). Es el valor por defecto; pásalo para anular un `--sam` previo.
+
+```bash
+freesls --sls -s dev
+```
+
+#### `--sam`
+
+Usa un template de AWS SAM (`template.yaml` / `template.yml`). Experimental (ver la advertencia de arriba).
+
+```bash
+freesls --sam -s dev
+```
+
+#### `--stage`
+
+Alias `-s`. Stage de despliegue que alimenta `${sls:stage}`, `${opt:stage}`, `${self:provider.stage}` y el nombre local de las Lambdas (`${service}-${stage}-${key}`). Por defecto `develop`.
+
+```bash
+freesls -s staging
+```
+
+#### `--region`
+
+Alias `-r`. Región de AWS para consultas SSM y contexto Lambda. Por defecto `us-east-1`.
+
+```bash
+freesls -r eu-west-1
+```
+
+#### `--port`
+
+Alias `-p`. Puerto HTTP local. Por defecto `4000`.
+
+```bash
+freesls -p 3000
+```
+
+#### `--base-path`
+
+Alias `-b` y `--prefix`. Prefijo que se añade a todas las rutas; útil cuando la ruta base desplegada difiere de la local. Por defecto ninguno.
+
+```bash
+freesls -b example-base-path
+# POST http://localhost:4000/example-base-path/create-campaign
+```
+
+#### `--profile`
+
+Perfil de AWS CLI / AWS SSO usado para las consultas SSM. Sin él se usan las credenciales del entorno. Los fallos de SSO indican `aws sso login --profile <perfil>`.
+
+```bash
+freesls --profile example-profile
+```
+
+#### `--param`
+
+Inyecta pares `clave=valor` en `process.env` y los expone como `${param:clave}`. Repetible; se permiten valores vacíos (`--param empty=`).
+
+```bash
+freesls --param deploymentStage=develop --param empty=
+```
+
+#### `--no-ssm`
+
+Desactiva las consultas a AWS SSM y resuelve `${ssm:/...}` desde `ssm.env`, fallbacks en YAML o mocks offline. Ver Modo Offline más abajo.
+
+```bash
+freesls --no-ssm
+```
+
+#### `--scheduler`
+
+Activa el endpoint local de EventBridge Scheduler (una sola vez) e inyecta `AWS_ENDPOINT_URL_SCHEDULER`. Ver Scheduler local más abajo.
+
+```bash
+freesls --scheduler --no-ssm
+```
+
+#### `--cf-value`
+
+Sobrescribe una referencia que FreeSLS no pueda derivar localmente, como `LogicalId.Atributo=valor` o `Outputs.OutputKey=valor`. Repetible y nunca consulta AWS.
+
+```bash
+freesls --scheduler --no-ssm --cf-value ExampleRole.Arn=arn:aws:iam::123456789012:role/team/example
+```
+
+#### `--show-env`
+
+Muestra los valores de entorno sin enmascarar. Úsalo solo en local, ya que los secretos se ven en claro.
+
+```bash
+freesls --show-env
+```
+
+#### `--debug`
+
+Alias `-d`. Logs detallados del ciclo de vida con tiempos por etapa (resolución de ruta, cola, Jiti, invocación, respuesta).
+
+```bash
+freesls --debug
+```
+
+#### `--version`
+
+Alias `-v` y `-V`. Muestra la versión instalada de FreeSLS.
+
+```bash
+freesls --version
+```
 
 ### Ejemplos comunes
 
@@ -143,8 +260,8 @@ freesls -v
 # Ejecutar Serverless Framework en stage 'dev' en el puerto 4000 usando perfil AWS SSO
 freesls -s dev -p 4000 --profile mi-empresa-dev
 
-# Ejecutar con un prefijo de ruta base (ej. http://localhost:4000/medical-history-app/...)
-freesls -s dev -p 4000 --base-path /medical-history-app
+# Ejecutar con un prefijo de ruta base (ej. http://localhost:4000/example-base-path/...)
+freesls -s dev -p 4000 --base-path /example-base-path
 
 # Ejecutar proyecto AWS SAM en stage 'dev'
 freesls -sam -s dev -p 4000 --profile mi-empresa-dev
@@ -156,7 +273,7 @@ freesls -s local --no-ssm
 freesls -s local --scheduler --no-ssm
 
 # Sobrescribir un atributo que CloudFormation no devuelve directamente
-freesls --scheduler --no-ssm --cf-value SchedulerRole.Arn=arn:aws:iam::123456789012:role/team/scheduler
+freesls --scheduler --no-ssm --cf-value ExampleRole.Arn=arn:aws:iam::123456789012:role/team/example
 
 # Inyectar parámetros personalizados a process.env y ${param:...}
 freesls -s dev --param domain=api.local --param deploymentStage=dev
@@ -223,17 +340,17 @@ En Serverless, `Ref`, `Fn::GetAtt` y `Fn::Sub` del entorno soportan identidades 
 ```yaml
 provider:
   environment:
-    TARGET_ARN: !GetAtt SendDashpushLambdaFunction.Arn
-    SCHEDULER_ROLE_ARN: !GetAtt SchedulerRole.Arn
+    TARGET_ARN: !GetAtt ExampleDashfunctionLambdaFunction.Arn
+    SCHEDULER_ROLE_ARN: !GetAtt ExampleRole.Arn
 resources:
   Resources:
-    SchedulerRole:
+    ExampleRole:
       Type: AWS::IAM::Role
       Properties:
         RoleName: local-scheduler
 functions:
-  send-push:
-    handler: src/send.handler
+  example-function:
+    handler: src/handler.run
 ```
 
 Los IDs lógicos generados de Serverless convierten `-` en `Dash` y `_` en `Underscore`, ponen la primera letra en mayúscula y añaden `LambdaFunction`. El nombre utiliza `name` explícito o `${service}-${stage}-${key}`. SAM utiliza `FunctionName` o `${service}-${logicalId}`, admite handlers sin HTTP y `CodeUri`. Los ARN locales Lambda/IAM consideran las particiones comercial, China y GovCloud; la cuenta predeterminada es `123456789012`. Los nombres y paths de roles IAM locales deben ser cadenas escalares. No se despliegan recursos.
@@ -309,7 +426,7 @@ Configurar la depuración en VS Code con **FreeSLS** es sumamente sencillo. Crea
       "type": "node",
       "request": "launch",
       "runtimeExecutable": "freesls",
-      "runtimeArgs": ["-s", "dev", "-p", "4000", "--profile", "tu-perfil-aws"],
+      "runtimeArgs": ["-s", "dev", "-p", "4000", "--profile", "example-profile"],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "internalConsoleOptions": "neverOpen",
@@ -320,7 +437,30 @@ Configurar la depuración en VS Code con **FreeSLS** es sumamente sencillo. Crea
       "type": "node",
       "request": "launch",
       "runtimeExecutable": "freesls",
-      "runtimeArgs": ["-sam", "-s", "dev", "-p", "4000", "--profile", "tu-perfil-aws"],
+      "runtimeArgs": ["-sam", "-s", "dev", "-p", "4000", "--profile", "example-profile"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "FreeSLS: Debug (Scheduler)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "freesls",
+      "runtimeArgs": [
+        "-s",
+        "dev",
+        "-p",
+        "3000",
+        "--profile",
+        "example-profile",
+        "--param",
+        "deploymentStage=develop",
+        "-b",
+        "example-base-path",
+        "--scheduler"
+      ],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "internalConsoleOptions": "neverOpen",

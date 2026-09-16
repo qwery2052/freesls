@@ -17,9 +17,9 @@
 </p>
 
 ```
-   /\_/\   FreeSLS v0.4.0-beta.6  [SLS] / [AWS SAM]
+   /\_/\   FreeSLS v0.4.0-beta.7  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
-   > ^ <   ● Service: user-management-api [stage: dev]
+   > ^ <   ● Service: example-service [stage: dev]
 ────────────────────────────────────────────────────────────
  Local Endpoint: http://localhost:4000
 ────────────────────────────────────────────────────────────
@@ -112,27 +112,144 @@ Or add a script to your `package.json`:
 
 ### CLI Flags
 
-| Flag                        | Alias            | Description                                                                   | Default                          |
-| --------------------------- | ---------------- | ----------------------------------------------------------------------------- | -------------------------------- |
-| `--sam`                     | `-sam`           | 🧪 **Experimental:** Uses AWS SAM template (`template.yaml` / `template.yml`) | `false`                          |
-| `--sls`                     | `-sls`           | Uses Serverless Framework template (`serverless.yml`)                         | `true` (default)                 |
-| `--stage`                   | `-s`             | Target deployment stage (`dev`, `staging`, `prod`)                            | `develop`                        |
-| `--region`                  | `-r`             | AWS region for SSM and Lambda context                                         | `us-east-1`                      |
-| `--port`                    | `-p`             | HTTP port for the local server                                                | `4000`                           |
-| `--base-path`               | `-b`, `--prefix` | Base path prefix for all endpoints (e.g. `/medical-history-app`)              | `""` (root `/`)                  |
-| `--profile`                 |                  | AWS CLI / AWS SSO profile name                                                | System environment credentials   |
-| `--param`                   |                  | Custom key=value parameters (injected into `process.env`)                     | `{}`                             |
-| `--no-ssm`                  |                  | Disables AWS SSM queries (uses `ssm.env`, YAML fallbacks, or mocks)           | `false` (queries real AWS SSM)   |
-| `--scheduler`               |                  | Enable the local one-time Lambda Scheduler endpoint                           | `false`                          |
-| `--cf-value <key=value...>` |                  | Override a reference (for example `SchedulerRole.Arn=arn:...`)                | None                             |
-| `--show-env`                |                  | Displays full, unmasked environment variables in console                      | `false` (masks sensitive values) |
-| `--debug`                   | `-d`             | Enables verbose lifecycle debug logging with stage timings                    | `false`                          |
-| `--version`                 | `-v`, `-V`       | Displays the installed FreeSLS version                                        |                                  |
+| Flag                                       | Alias            | Description                                                                   | Default                          |
+| ------------------------------------------ | ---------------- | ----------------------------------------------------------------------------- | -------------------------------- |
+| [`--sam`](#--sam)                          | `-sam`           | 🧪 **Experimental:** Uses AWS SAM template (`template.yaml` / `template.yml`) | `false`                          |
+| [`--sls`](#--sls)                          | `-sls`           | Uses Serverless Framework template (`serverless.yml`)                         | `true` (default)                 |
+| [`--stage`](#--stage)                      | `-s`             | Target deployment stage (`dev`, `staging`, `prod`)                            | `develop`                        |
+| [`--region`](#--region)                    | `-r`             | AWS region for SSM and Lambda context                                         | `us-east-1`                      |
+| [`--port`](#--port)                        | `-p`             | HTTP port for the local server                                                | `4000`                           |
+| [`--base-path`](#--base-path)              | `-b`, `--prefix` | Base path prefix for all endpoints (e.g. `/example-base-path`)                | `""` (root `/`)                  |
+| [`--profile`](#--profile)                  |                  | AWS CLI / AWS SSO profile name                                                | System environment credentials   |
+| [`--param`](#--param)                      |                  | Custom key=value parameters (injected into `process.env`)                     | `{}`                             |
+| [`--no-ssm`](#--no-ssm)                    |                  | Disables AWS SSM queries (uses `ssm.env`, YAML fallbacks, or mocks)           | `false` (queries real AWS SSM)   |
+| [`--scheduler`](#--scheduler)              |                  | Enable the local one-time Lambda Scheduler endpoint                           | `false`                          |
+| [`--cf-value <key=value...>`](#--cf-value) |                  | Override a reference (for example `ExampleRole.Arn=arn:...`)                  | None                             |
+| [`--show-env`](#--show-env)                |                  | Displays full, unmasked environment variables in console                      | `false` (masks sensitive values) |
+| [`--debug`](#--debug)                      | `-d`             | Enables verbose lifecycle debug logging with stage timings                    | `false`                          |
+| [`--version`](#--version)                  | `-v`, `-V`       | Displays the installed FreeSLS version                                        |                                  |
 
 > [!WARNING]
 > **AWS SAM Mode (`--sam`) is Experimental**
 >
 > Emulation for AWS SAM is currently in active **beta / experimental** development. Supported intrinsic functions include `Ref`, `Fn::GetAtt`, `Fn::Sub`, and SSM dynamic references (`{{resolve:ssm:...}}`). Advanced CloudFormation capabilities (such as complex `Mappings`, nested stacks, or unsupported intrinsic functions) are partial.
+
+### CLI Reference
+
+Detailed usage for every flag. The names in the table above link here.
+
+#### `--sls`
+
+Use the Serverless Framework template (`serverless.yml`). This is the default; pass it to override a previous `--sam`.
+
+```bash
+freesls --sls -s dev
+```
+
+#### `--sam`
+
+Use an AWS SAM template (`template.yaml` / `template.yml`). Experimental (see the warning above).
+
+```bash
+freesls --sam -s dev
+```
+
+#### `--stage`
+
+Alias `-s`. Deployment stage used for `${sls:stage}`, `${opt:stage}`, `${self:provider.stage}`, and for naming local Lambdas (`${service}-${stage}-${key}`). Default `develop`.
+
+```bash
+freesls -s staging
+```
+
+#### `--region`
+
+Alias `-r`. AWS region for SSM lookups and Lambda context. Default `us-east-1`.
+
+```bash
+freesls -r eu-west-1
+```
+
+#### `--port`
+
+Alias `-p`. Local HTTP port. Default `4000`.
+
+```bash
+freesls -p 3000
+```
+
+#### `--base-path`
+
+Aliases `-b` and `--prefix`. Prefix added to every route, useful when your deployed API base path differs from the local default. Default none.
+
+```bash
+freesls -b example-base-path
+# POST http://localhost:4000/example-base-path/create-campaign
+```
+
+#### `--profile`
+
+AWS CLI / AWS SSO profile used for SSM lookups. Without it, the environment credentials are used. SSO failures point to `aws sso login --profile <profile>`.
+
+```bash
+freesls --profile example-profile
+```
+
+#### `--param`
+
+Inject `key=value` pairs into `process.env` and expose them as `${param:key}`. Repeatable; empty values are allowed (`--param empty=`).
+
+```bash
+freesls --param deploymentStage=develop --param empty=
+```
+
+#### `--no-ssm`
+
+Disable AWS SSM queries and resolve `${ssm:/...}` from `ssm.env`, YAML fallbacks, or offline mocks. See Offline Mode below.
+
+```bash
+freesls --no-ssm
+```
+
+#### `--scheduler`
+
+Enable the local one-time EventBridge Scheduler endpoint and inject `AWS_ENDPOINT_URL_SCHEDULER`. See Local Scheduler below.
+
+```bash
+freesls --scheduler --no-ssm
+```
+
+#### `--cf-value`
+
+Override a reference FreeSLS cannot derive locally, as `LogicalId.Attribute=value` or `Outputs.OutputKey=value`. Repeatable and never queries AWS.
+
+```bash
+freesls --scheduler --no-ssm --cf-value ExampleRole.Arn=arn:aws:iam::123456789012:role/team/example
+```
+
+#### `--show-env`
+
+Print environment values without masking. Use only locally, since secrets are shown in cleartext.
+
+```bash
+freesls --show-env
+```
+
+#### `--debug`
+
+Alias `-d`. Verbose lifecycle logs with per-stage timings (path resolution, queue, Jiti, invocation, response).
+
+```bash
+freesls --debug
+```
+
+#### `--version`
+
+Aliases `-v` and `-V`. Print the installed FreeSLS version.
+
+```bash
+freesls --version
+```
 
 ### Common Examples
 
@@ -143,8 +260,8 @@ freesls -v
 # Run Serverless Framework in 'dev' stage on port 4000 using an AWS SSO profile
 freesls -s dev -p 4000 --profile my-org-dev
 
-# Run with a custom base path prefix (e.g. http://localhost:4000/medical-history-app/...)
-freesls -s dev -p 4000 --base-path /medical-history-app
+# Run with a custom base path prefix (e.g. http://localhost:4000/example-base-path/...)
+freesls -s dev -p 4000 --base-path /example-base-path
 
 # Run AWS SAM project in 'dev' stage
 freesls -sam -s dev -p 4000 --profile my-org-dev
@@ -156,7 +273,7 @@ freesls -s local --no-ssm
 freesls -s local --scheduler --no-ssm
 
 # Override an attribute that CloudFormation cannot return directly
-freesls --scheduler --no-ssm --cf-value SchedulerRole.Arn=arn:aws:iam::123456789012:role/team/scheduler
+freesls --scheduler --no-ssm --cf-value ExampleRole.Arn=arn:aws:iam::123456789012:role/team/example
 
 # Inject custom parameters into process.env and ${param:...}
 freesls -s dev --param domain=api.local --param deploymentStage=dev
@@ -223,17 +340,17 @@ Serverless environment `Ref`, `Fn::GetAtt` and `Fn::Sub` support registered Lamb
 ```yaml
 provider:
   environment:
-    TARGET_ARN: !GetAtt SendDashpushLambdaFunction.Arn
-    SCHEDULER_ROLE_ARN: !GetAtt SchedulerRole.Arn
+    TARGET_ARN: !GetAtt ExampleDashfunctionLambdaFunction.Arn
+    SCHEDULER_ROLE_ARN: !GetAtt ExampleRole.Arn
 resources:
   Resources:
-    SchedulerRole:
+    ExampleRole:
       Type: AWS::IAM::Role
       Properties:
         RoleName: local-scheduler
 functions:
-  send-push:
-    handler: src/send.handler
+  example-function:
+    handler: src/handler.run
 ```
 
 Serverless generated logical IDs normalize `-` to `Dash`, `_` to `Underscore`, capitalize the first character and append `LambdaFunction`. Function names use explicit `name` or `${service}-${stage}-${key}`. SAM uses `FunctionName` or `${service}-${logicalId}` and supports non-HTTP handlers and `CodeUri`. Local Lambda/IAM ARNs account for commercial, China and GovCloud partitions; the default account is `123456789012`. Local IAM role names/paths must be scalar strings. No resources are deployed.
@@ -309,7 +426,7 @@ Configuring VS Code debugging with **FreeSLS** is straightforward. Add this conf
       "type": "node",
       "request": "launch",
       "runtimeExecutable": "freesls",
-      "runtimeArgs": ["-s", "dev", "-p", "4000", "--profile", "your-aws-profile"],
+      "runtimeArgs": ["-s", "dev", "-p", "4000", "--profile", "example-profile"],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "internalConsoleOptions": "neverOpen",
@@ -320,7 +437,30 @@ Configuring VS Code debugging with **FreeSLS** is straightforward. Add this conf
       "type": "node",
       "request": "launch",
       "runtimeExecutable": "freesls",
-      "runtimeArgs": ["-sam", "-s", "dev", "-p", "4000", "--profile", "your-aws-profile"],
+      "runtimeArgs": ["-sam", "-s", "dev", "-p", "4000", "--profile", "example-profile"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "FreeSLS: Debug (Scheduler)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "freesls",
+      "runtimeArgs": [
+        "-s",
+        "dev",
+        "-p",
+        "3000",
+        "--profile",
+        "example-profile",
+        "--param",
+        "deploymentStage=develop",
+        "-b",
+        "example-base-path",
+        "--scheduler"
+      ],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "internalConsoleOptions": "neverOpen",

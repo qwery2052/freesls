@@ -77,7 +77,7 @@ export function printBanner(
   const shinyBadge = shiny ? `  ${pc.bold(pc.bgYellow(pc.black(" ✨ SHINY ")))}` : "";
 
   const bannerArt = `
-   ${pc[colors[0]]("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.4.0-beta.6")}  ${frameworkBadge}${debugBadge}${shinyBadge}
+   ${pc[colors[0]]("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.4.0-beta.7")}  ${frameworkBadge}${debugBadge}${shinyBadge}
   ${pc[colors[1]]("( o.o )")}  ${pc.dim("Offline API Gateway & Lambda Runner")}
    ${pc[colors[2]]("> ^ <")}   ${pc.green("●")} Service: ${pc.bold(serviceName)} ${pc.dim(`[stage: ${stage}]`)}
   `;
@@ -234,7 +234,7 @@ export function printSchedulerEvent(
         : "unknown";
       const relative = event.due ? pc.dim(` · in ${formatDuration(event.due - Date.now())}`) : "";
       console.log(
-        `${face} ${pc.bold(pc.cyan("[Scheduler]"))} Schedule received ${pc.bold(event.name)}`,
+        `\n${face} ${pc.bold(pc.cyan("[Scheduler]"))} Schedule received ${pc.bold(event.name)}`,
       );
       console.log(`   ${pc.dim("├─ target:")} ${pc.yellow(targetName)}`);
       console.log(`   ${pc.dim("│  arn:")}    ${pc.dim(event.target)}`);
@@ -287,7 +287,7 @@ function statusColor(statusCode: number) {
 export function printLambdaStart(functionName: string) {
   const face = pc.magenta(randomCatFace());
   console.log(
-    `${face} ${pc.bold(pc.magenta("[Lambda]"))}${pc.bold(pc.green("[start]"))} ${pc.bold(functionName)}`,
+    `\n${face} ${pc.bold(pc.cyan("[Lambda]"))}${pc.bold(pc.green("[start]"))} ${pc.bold(functionName)}`,
   );
 }
 
@@ -302,7 +302,7 @@ export function printLambdaEnd(
 ) {
   const face = pc.magenta(randomCatFace());
   console.log(
-    `${face} ${pc.bold(pc.magenta("[Lambda]"))}${pc.bold(pc.magenta("[end]"))} ${formatMethod(method)} ${pc.white(path)} ${statusColor(statusCode)} ${pc.dim(`(${durationMs}ms)`)}`,
+    `\n${face} ${pc.bold(pc.cyan("[Lambda]"))}${pc.bold(pc.magenta("[end]"))} ${formatMethod(method)} ${pc.white(path)} ${statusColor(statusCode)} ${pc.dim(`(${durationMs}ms)`)}`,
   );
 }
 
