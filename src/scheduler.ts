@@ -395,6 +395,72 @@ export class LocalScheduler {
     });
   }
 
+  list(query: Record<string, unknown> = {}): {
+    Schedules: Array<Record<string, unknown>>;
+    NextToken?: string;
+  } {
+    fields(
+      query,
+      ["MaxResults", "NamePrefix", "NextToken", "ScheduleGroup", "State"],
+      "ListSchedules",
+    );
+    if (query.ScheduleGroup !== undefined && query.ScheduleGroup !== "default")
+      invalid("Only ScheduleGroup default is supported. Omit ScheduleGroup or use default.");
+    let maxResults = 100;
+    if (query.MaxResults !== undefined) {
+      const parsed = Number(query.MaxResults);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 100)
+        invalid("MaxResults must be an integer between 1 and 100.");
+      maxResults = parsed;
+    }
+    let namePrefix = "";
+    if (query.NamePrefix !== undefined) {
+      if (typeof query.NamePrefix !== "string" || !/^[\w.-]{1,64}$/.test(query.NamePrefix))
+        invalid("NamePrefix must contain 1-64 letters, digits, underscores, dots or hyphens.");
+      namePrefix = query.NamePrefix;
+    }
+    let stateFilter: string | undefined;
+    if (query.State !== undefined) {
+      if (query.State !== "ENABLED" && query.State !== "DISABLED")
+        invalid("State accepts: ENABLED, DISABLED.");
+      stateFilter = String(query.State);
+    }
+    let offset = 0;
+    if (query.NextToken !== undefined) {
+      let decoded = "";
+      try {
+        decoded = Buffer.from(String(query.NextToken), "base64url").toString("utf8");
+      } catch {
+        decoded = "";
+      }
+      if (!/^\d+$/.test(decoded)) invalid("NextToken is not valid for this local session.");
+      offset = Number(decoded);
+    }
+    const matches = [...this.schedules.entries()]
+      .filter(
+        ([name, s]) =>
+          name.startsWith(namePrefix) &&
+          (stateFilter === undefined || s.body.State === stateFilter),
+      )
+      .sort(([a], [b]) => a.localeCompare(b));
+    const page = matches.slice(offset, offset + maxResults);
+    const result: { Schedules: Array<Record<string, unknown>>; NextToken?: string } = {
+      Schedules: page.map(([name, s]) => ({
+        Arn: s.arn,
+        Name: name,
+        GroupName: "default",
+        State: s.body.State,
+        CreationDate: s.created / 1000,
+        LastModificationDate: s.modified / 1000,
+        Target: { Arn: s.target },
+      })),
+    };
+    const nextOffset = offset + page.length;
+    if (nextOffset < matches.length)
+      result.NextToken = Buffer.from(String(nextOffset)).toString("base64url");
+    return result;
+  }
+
   delete(name: string, group?: unknown): void {
     this.identity(name, group);
     const schedule = this.schedules.get(name);
@@ -478,6 +544,14 @@ export async function startScheduler(
 ): Promise<{ endpoint: string; close(): Promise<void> }> {
   const app = express();
   app.use(express.json({ limit: "300kb" }));
+  app.all("/schedules", (req, res, next) => {
+    try {
+      if (req.method !== "GET") invalid("ListSchedules only supports GET /schedules.");
+      res.json(scheduler.list(req.query));
+    } catch (error) {
+      next(error);
+    }
+  });
   app.all("/schedules/:name", (req, res, next) => {
     try {
       fields(
@@ -508,7 +582,7 @@ export async function startScheduler(
     next(
       new SchedulerError(
         "ValidationException",
-        "Supported local Scheduler endpoints: POST/GET/DELETE /schedules/{Name}.",
+        "Supported local Scheduler endpoints: POST/GET/PUT/DELETE /schedules/{Name} and GET /schedules.",
       ),
     ),
   );

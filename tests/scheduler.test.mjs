@@ -10,6 +10,7 @@ import {
   GetScheduleCommand,
   UpdateScheduleCommand,
   DeleteScheduleCommand,
+  ListSchedulesCommand,
 } from "@aws-sdk/client-scheduler";
 import { LocalScheduler, scheduleInstant, startScheduler } from "../dist/scheduler.js";
 import { loadServerlessConfig } from "../dist/parser.js";
@@ -464,4 +465,113 @@ test("SDK UpdateSchedule changes the date and updates LastModificationDate", asy
   assert.equal(stored.Arn, created.ScheduleArn);
   assert.ok(stored.LastModificationDate instanceof Date);
   assert.ok(stored.LastModificationDate.getTime() > stored.CreationDate.getTime());
+});
+
+test("list returns summaries with prefix/state filters and pagination", () => {
+  const scheduler = new LocalScheduler("us-east-1", new Set([arn]), async () => {}, new Clock());
+  scheduler.create("campaign-a", {
+    ...base(),
+    ScheduleExpression: "at(2030-01-01T10:00:00)",
+  });
+  scheduler.create("campaign-b", {
+    ...base(),
+    ScheduleExpression: "at(2030-01-02T10:00:00)",
+    State: "DISABLED",
+  });
+  scheduler.create("other", { ...base(), ScheduleExpression: "at(2030-01-03T10:00:00)" });
+
+  const all = scheduler.list();
+  assert.deepEqual(
+    all.Schedules.map(summary => summary.Name),
+    ["campaign-a", "campaign-b", "other"],
+  );
+  assert.equal(all.Schedules[0].GroupName, "default");
+  assert.equal(all.Schedules[0].Target.Arn, arn);
+  assert.equal(typeof all.Schedules[0].CreationDate, "number");
+
+  assert.deepEqual(
+    scheduler.list({ NamePrefix: "campaign-" }).Schedules.map(summary => summary.Name),
+    ["campaign-a", "campaign-b"],
+  );
+  assert.deepEqual(
+    scheduler.list({ State: "DISABLED" }).Schedules.map(summary => summary.Name),
+    ["campaign-b"],
+  );
+
+  const first = scheduler.list({ MaxResults: 2 });
+  assert.deepEqual(
+    first.Schedules.map(summary => summary.Name),
+    ["campaign-a", "campaign-b"],
+  );
+  assert.ok(first.NextToken);
+  const second = scheduler.list({ MaxResults: 2, NextToken: first.NextToken });
+  assert.deepEqual(
+    second.Schedules.map(summary => summary.Name),
+    ["other"],
+  );
+  assert.equal(second.NextToken, undefined);
+
+  assert.throws(
+    () => scheduler.list({ MaxResults: 0 }),
+    error => error.code === "ValidationException",
+  );
+  assert.throws(
+    () => scheduler.list({ NamePrefix: "bad prefix" }),
+    error => error.code === "ValidationException",
+  );
+  assert.throws(
+    () => scheduler.list({ NextToken: "not-a-token!" }),
+    error => error.code === "ValidationException",
+  );
+  assert.throws(
+    () => scheduler.list({ ScheduleGroup: "custom" }),
+    error => error.code === "ValidationException",
+  );
+  scheduler.close();
+});
+
+test("SDK ListSchedules returns created schedules and paginates", async t => {
+  const scheduler = new LocalScheduler("us-east-1", new Set([arn]), async () => {}, new Clock());
+  scheduler.create("campaign-1", {
+    ...base(),
+    ScheduleExpression: "at(2030-01-01T10:00:00)",
+  });
+  scheduler.create("campaign-2", {
+    ...base(),
+    ScheduleExpression: "at(2030-01-02T10:00:00)",
+  });
+  const server = await startScheduler(scheduler);
+  const previous = process.env.AWS_ENDPOINT_URL_SCHEDULER;
+  process.env.AWS_ENDPOINT_URL_SCHEDULER = server.endpoint;
+  const client = new SchedulerClient({
+    region: "us-east-1",
+    credentials: { accessKeyId: "local", secretAccessKey: "local" },
+    maxAttempts: 1,
+  });
+  t.after(async () => {
+    client.destroy();
+    await server.close();
+    if (previous === undefined) delete process.env.AWS_ENDPOINT_URL_SCHEDULER;
+    else process.env.AWS_ENDPOINT_URL_SCHEDULER = previous;
+  });
+
+  const page = await client.send(new ListSchedulesCommand({ NamePrefix: "campaign-" }));
+  assert.equal(page.Schedules.length, 2);
+  assert.equal(page.Schedules[0].Target.Arn, arn);
+  assert.ok(page.Schedules[0].CreationDate instanceof Date);
+
+  const first = await client.send(
+    new ListSchedulesCommand({ NamePrefix: "campaign-", MaxResults: 1 }),
+  );
+  assert.equal(first.Schedules.length, 1);
+  assert.ok(first.NextToken);
+  const second = await client.send(
+    new ListSchedulesCommand({
+      NamePrefix: "campaign-",
+      MaxResults: 1,
+      NextToken: first.NextToken,
+    }),
+  );
+  assert.equal(second.Schedules.length, 1);
+  assert.notEqual(second.Schedules[0].Name, first.Schedules[0].Name);
 });

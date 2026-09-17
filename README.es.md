@@ -17,7 +17,7 @@
 </p>
 
 ```
-   /\_/\   FreeSLS v0.4.0-beta.8  [SLS] / [AWS SAM]
+   /\_/\   FreeSLS v0.4.0-beta.9  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
    > ^ <   ● Service: example-service [stage: dev]
 ────────────────────────────────────────────────────────────
@@ -291,7 +291,7 @@ freesls -s dev --debug
 
 `--scheduler` emula EventBridge **Scheduler** para schedules puntuales `at(...)`. No emula el bus de eventos (`PutEvents`) ni las reglas `schedule: cron(...)`.
 
-**Operaciones:** `CreateSchedule`, `GetSchedule`, `UpdateSchedule`, `DeleteSchedule` (solo grupo `default`).
+**Operaciones:** `CreateSchedule`, `GetSchedule`, `UpdateSchedule`, `ListSchedules`, `DeleteSchedule` (solo grupo `default`).
 
 ### Cómo funciona, paso a paso
 
@@ -396,6 +396,20 @@ await scheduler.send(new DeleteScheduleCommand({ Name: "example-job" }));
 
 Ambas operaciones usan el `Name` del schedule (más `GroupName`, `default` en local). La consola imprime `[Scheduler] Schedule updated …` o `[Scheduler] Schedule cancelled …`.
 
+### Listar schedules
+
+`ListSchedules` devuelve los schedules de la sesión (grupo `default`), con `NamePrefix`, `State`, `MaxResults` (1–100) y `NextToken` opcionales para paginar:
+
+```ts
+const page = await scheduler.send(
+  new ListSchedulesCommand({ NamePrefix: "campaign-", MaxResults: 50 }),
+);
+for (const summary of page.Schedules ?? []) {
+  const detail = await scheduler.send(new GetScheduleCommand({ Name: summary.Name! }));
+  // …
+}
+```
+
 ### Credenciales
 
 El SDK de Scheduler firma cada petición, así que necesita credenciales de AWS. Si usas SSO, ejecuta `aws sso login --profile <perfil>` y listo; FreeSLS preserva tus credenciales existentes. En una app exclusivamente local sin credenciales, pon unas ficticias (`AWS_ACCESS_KEY_ID=local`, `AWS_SECRET_ACCESS_KEY=local`).
@@ -410,7 +424,7 @@ El SDK de Scheduler firma cada petición, así que necesita credenciales de AWS.
 
 | Soportado    | Contrato                                                                                                                         |
 | ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| Operaciones  | `CreateSchedule`, `GetSchedule`, `UpdateSchedule`, `DeleteSchedule`; solo grupo `default`                                        |
+| Operaciones  | `CreateSchedule`, `GetSchedule`, `UpdateSchedule`, `ListSchedules`, `DeleteSchedule`; solo grupo `default`                       |
 | Fechas       | Fechas futuras `at(...)`; zonas IANA disponibles en ICU de Node, UTC por defecto                                                 |
 | Destinos     | ARN exacto de Lambdas registradas del proyecto, incluidas funciones sin eventos HTTP                                             |
 | Input        | JSON explícito válido de hasta 256 KB, entregado directamente al handler; usa `'{}'` para un evento vacío                        |
