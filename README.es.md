@@ -17,7 +17,7 @@
 </p>
 
 ```
-   /\_/\   FreeSLS v0.4.0-beta.9  [SLS] / [AWS SAM]
+   /\_/\   FreeSLS v0.4.0-beta.11  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
    > ^ <   ● Service: example-service [stage: dev]
 ────────────────────────────────────────────────────────────
@@ -149,6 +149,8 @@ freesls --sls -s dev
 #### `--sam`
 
 Usa un template de AWS SAM (`template.yaml` / `template.yml`). Experimental (ver la advertencia de arriba).
+
+Para funciones con `Metadata.BuildMethod: esbuild`, FreeSLS ejecuta el archivo fuente indicado en `Metadata.BuildProperties.EntryPoints`, usando la función exportada indicada en `Handler`. Las rutas de entrada son relativas a `Properties.CodeUri`, usando como alternativa `Globals.Function.CodeUri` para funciones SAM y finalmente la carpeta del proyecto. Si hay varias entradas, exactamente un nombre de archivo (sin extensión) debe coincidir con el módulo de Handler; las listas ambiguas o sin coincidencias generan un error explícito. Sin entradas, se utiliza la resolución habitual `CodeUri` + `Handler`. FreeSLS ejecuta el código fuente directamente; no genera un bundle ni aplica otras opciones de compilación de esbuild.
 
 ```bash
 freesls --sam -s dev
@@ -460,6 +462,8 @@ functions:
 ```
 
 Los IDs lógicos generados de Serverless convierten `-` en `Dash` y `_` en `Underscore`, ponen la primera letra en mayúscula y añaden `LambdaFunction`. El nombre utiliza `name` o `${service}-${stage}-${key}`. SAM utiliza `FunctionName` o `${service}-${logicalId}`. Los ARN locales usan `--region`, la cuenta simulada `123456789012` y la partición correspondiente (`aws`, `aws-cn`, `aws-us-gov`); nunca consultan AWS. No se despliegan recursos.
+
+En SAM, el nombre local del servicio proviene de `Description` de la plantilla (normalizado y limitado a 30 caracteres), o del nombre de la carpeta del proyecto si no existe. Los nombres de Lambda autogenerados que superan 64 caracteres o contienen caracteres inválidos se normalizan y reciben un sufijo hash estable dentro del límite de 64 caracteres. Los valores explícitos de `FunctionName` se validan sin reescribirlos. `Ref`, `GetAtt` y `Sub` utilizan la misma identidad local. Estos nombres internos no se añaden a las rutas HTTP; solo `--base-path` / `--prefix` añade un prefijo a la URL.
 
 #### Cuando una referencia no se puede resolver: `--cf-value`
 

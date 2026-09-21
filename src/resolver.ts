@@ -14,9 +14,19 @@ export interface ResolveContext {
 /** CloudFormation-generated role names are bounded; keep local defaults stable and distinct. */
 export function localRoleName(prefix: string, logicalId: string): string {
   const name = `${prefix}-${logicalId}`;
-  return name.length <= 64
-    ? name
-    : `${name.slice(0, 55)}-${createHash("sha256").update(name).digest("hex").slice(0, 8)}`;
+  return boundedLocalName(name);
+}
+
+/** SAM defaults must be valid Lambda names even with long IDs or directory names. */
+export function localFunctionName(prefix: string, logicalId: string): string {
+  const name = `${prefix}-${logicalId}`;
+  return boundedLocalName(name, name.replace(/[^a-zA-Z0-9_-]/g, "-"));
+}
+
+function boundedLocalName(original: string, normalized = original): string {
+  return normalized.length <= 64 && normalized === original
+    ? normalized
+    : `${normalized.slice(0, 55)}-${createHash("sha256").update(original).digest("hex").slice(0, 8)}`;
 }
 
 export function awsPartition(region: string): string {

@@ -17,7 +17,7 @@
 </p>
 
 ```
-   /\_/\   FreeSLS v0.4.0-beta.9  [SLS] / [AWS SAM]
+   /\_/\   FreeSLS v0.4.0-beta.11  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
    > ^ <   ● Service: example-service [stage: dev]
 ────────────────────────────────────────────────────────────
@@ -149,6 +149,8 @@ freesls --sls -s dev
 #### `--sam`
 
 Use an AWS SAM template (`template.yaml` / `template.yml`). Experimental (see the warning above).
+
+For functions with `Metadata.BuildMethod: esbuild`, FreeSLS runs the source file from `Metadata.BuildProperties.EntryPoints` using the exported function named in `Handler`. Entry points are relative to `Properties.CodeUri`, falling back to `Globals.Function.CodeUri` for SAM functions, then the project directory. With multiple entry points, exactly one file's basename (without extension) must match the Handler module; ambiguous or unmatched lists fail explicitly. Without entry points, the usual `CodeUri` + `Handler` resolution applies. FreeSLS executes the source directly; it does not run an esbuild bundle or apply other esbuild build options.
 
 ```bash
 freesls --sam -s dev
@@ -460,6 +462,8 @@ functions:
 ```
 
 Serverless logical IDs normalize `-` to `Dash`, `_` to `Underscore`, capitalize the first character and append `LambdaFunction`. Function names use `name` or `${service}-${stage}-${key}`. SAM uses `FunctionName` or `${service}-${logicalId}`. Local ARNs use `--region`, the simulated account `123456789012`, and the matching partition (`aws`, `aws-cn`, `aws-us-gov`); they never touch AWS. No resources are deployed.
+
+For SAM, the local service name comes from the template's `Description` (sanitized and limited to 30 characters), or the project directory name when absent. Automatically generated Lambda names that exceed 64 characters or contain invalid characters are normalized and given a stable hash suffix within the 64-character limit. Explicit `FunctionName` values are validated without rewriting. `Ref`, `GetAtt`, and `Sub` use the same local identity. These internal names do not prefix HTTP routes; only `--base-path` / `--prefix` adds a URL prefix.
 
 #### When a reference cannot be resolved: `--cf-value`
 

@@ -633,6 +633,142 @@ Resources:
   assert.equal(loaded.globalEnv.TARGET, loaded.functions[0].arn);
 });
 
+test("SAM resolves esbuild entry points relative to effective CodeUri", async t => {
+  const cases = [
+    { entries: ["src/handler.ts"], expected: "global/src/handler.ts.run" },
+    { entries: ["src/main.ts"], expected: "global/src/main.ts.run" },
+    { entries: ["src/other.ts", "src/handler.ts"], expected: "global/src/handler.ts.run" },
+    { entries: ["src\\handler.ts"], codeUri: "./local/", expected: "local/src/handler.ts.run" },
+    { expected: "global/handler.run" },
+    { entries: ["src/handler.ts"], method: "makefile", expected: "global/handler.run" },
+    { entries: [] },
+    { entries: "src/handler.ts" },
+    { entries: [42] },
+    { entries: [" "] },
+    { entries: ["src/a.ts", "src/b.ts"] },
+    { entries: ["a/handler.ts", "b/handler.ts"] },
+  ];
+  const directory = await fixture(t, {});
+  for (const { entries, expected, codeUri, method = "esbuild" } of cases) {
+    await writeFile(
+      path.join(directory, "template.yaml"),
+      JSON.stringify({
+        Globals: { Function: { CodeUri: "global" } },
+        Resources: {
+          Target: {
+            Type: "AWS::Serverless::Function",
+            Metadata: { BuildMethod: method, BuildProperties: { EntryPoints: entries } },
+            Properties: {
+              Handler: "handler.run",
+              ...(codeUri ? { CodeUri: codeUri } : {}),
+              Events: { Api: { Type: "Api", Properties: { Path: "/target", Method: "post" } } },
+            },
+          },
+        },
+      }),
+    );
+    const result = loadSamConfig(directory, options);
+    if (expected) {
+      const loaded = await result;
+      assert.equal(loaded.functions[0].handler, expected);
+      assert.equal(loaded.routes[0].handler, expected);
+    } else await assert.rejects(result, /EntryPoints for function Target/);
+  }
+});
+
+test("SAM bounds generated names and keeps references and HTTP routes consistent", async t => {
+  const ids = [
+    "RescheduleMessagingCampaignFunction",
+    "RescheduleMessagingCampaignFunctionTwo",
+    "F".repeat(33),
+    "F".repeat(34),
+  ];
+  const directory = await fixture(t, {
+    "template.yaml": JSON.stringify({
+      Description: "A long backend description for messaging services",
+      Resources: Object.fromEntries(
+        ids.map((id, index) => [
+          id,
+          {
+            Type: index % 2 ? "AWS::Lambda::Function" : "AWS::Serverless::Function",
+            Properties: {
+              Handler: "handler.run",
+              Environment: {
+                Variables: {
+                  NAME: { Ref: id },
+                  ARN: { "Fn::GetAtt": [id, "Arn"] },
+                  SUB_ARN: { "Fn::Sub": `\${${id}.Arn}` },
+                },
+              },
+              Events: {
+                Api: { Type: "Api", Properties: { Path: `/endpoint-${index}`, Method: "post" } },
+              },
+            },
+          },
+        ]),
+      ),
+    }),
+  });
+  for (const scheduler of [false, true]) {
+    const loaded = await loadSamConfig(directory, { ...options, scheduler });
+    assert.equal(new Set(loaded.functions.map(fn => fn.arn)).size, ids.length);
+    for (const [index, fn] of loaded.functions.entries()) {
+      assert.match(fn.environment.NAME, /^[a-zA-Z0-9_-]{1,64}$/);
+      assert.equal(fn.arn, `arn:aws:lambda:eu-west-1:123456789012:function:${fn.environment.NAME}`);
+      assert.equal(fn.environment.ARN, fn.arn);
+      assert.equal(fn.environment.SUB_ARN, fn.arn);
+      assert.equal(loaded.routes[index].arn, fn.arn);
+      assert.equal(loaded.routes[index].path, `/endpoint-${index}`);
+    }
+    assert.equal(loaded.functions[2].environment.NAME, `${loaded.config.service}-${ids[2]}`);
+    assert.equal(loaded.functions[3].environment.NAME.length, 64);
+    assert.deepEqual(
+      (await loadSamConfig(directory, { ...options, scheduler })).functions,
+      loaded.functions,
+    );
+  }
+});
+
+test("SAM normalizes directory-based generated names without merging distinct prefixes", () => {
+  const resource = { Target: { Type: "AWS::Serverless::Function" } };
+  const resolve = serviceName =>
+    resolveSamVariables(
+      "${Target}",
+      {},
+      {
+        region: options.region,
+        serviceName,
+        resources: resource,
+      },
+    );
+  assert.match(resolve("my project.v1"), /^[a-zA-Z0-9_-]{1,64}$/);
+  assert.notEqual(resolve("my project.v1"), resolve("my-project-v1"));
+});
+
+test("SAM preserves valid explicit names and rejects invalid explicit names", async t => {
+  const directory = await fixture(t, {});
+  for (const name of ["a".repeat(64), "a".repeat(65), "invalid.name", ""]) {
+    await writeFile(
+      path.join(directory, "template.yaml"),
+      JSON.stringify({
+        Resources: {
+          Target: {
+            Type: "AWS::Serverless::Function",
+            Properties: {
+              FunctionName: { "Fn::Sub": "${Name}" },
+              Handler: "handler.run",
+            },
+          },
+        },
+      }),
+    );
+    const result = loadSamConfig(directory, { ...options, params: { Name: name } });
+    if (name.length === 64)
+      assert.ok((await result).functions[0].arn.endsWith(`:function:${name}`));
+    else await assert.rejects(result, /Invalid FunctionName for Target/);
+  }
+});
+
 test("local identities use the resolved service and bounded, distinct generated role names", async t => {
   const service = "a-service-name-long-enough-for-generated-roles";
   const roleA = "EventBridgeSchedulerExecutionRoleOne";

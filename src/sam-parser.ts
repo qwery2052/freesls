@@ -8,7 +8,13 @@ import {
   DEFAULT_OFFLINE_ENV,
 } from "./types.js";
 import { parseYaml, resolveSSMValues, type ParserOptions } from "./parser.js";
-import { extractSSMPaths, resolveScalarData, awsPartition, localRoleName } from "./resolver.js";
+import {
+  extractSSMPaths,
+  resolveScalarData,
+  awsPartition,
+  localRoleName,
+  localFunctionName,
+} from "./resolver.js";
 
 export interface SamParameterDefinition {
   Type?: string;
@@ -41,6 +47,10 @@ export interface SamFunctionProperties {
 export interface SamResource {
   Type?: string;
   Properties?: Record<string, any>;
+  Metadata?: {
+    BuildMethod?: string;
+    BuildProperties?: { EntryPoints?: unknown };
+  };
 }
 
 export interface SamTemplate {
@@ -50,6 +60,7 @@ export interface SamTemplate {
   Globals?: {
     Function?: {
       Runtime?: string;
+      CodeUri?: string;
       Timeout?: number;
       Environment?: {
         Variables?: Record<string, unknown>;
@@ -175,7 +186,7 @@ function resolveCloudFormationRef(
   ) {
     return resolveTemplatePropertyString(
       resource.Properties?.FunctionName,
-      `${options.serviceName}-${trimmedRef}`,
+      localFunctionName(options.serviceName, trimmedRef),
       options,
     );
   }
@@ -504,16 +515,13 @@ function resolveSamEnvironmentMap(
 }
 
 /**
- * Normalize HTTP routes for a SAM function.
+ * Resolve the source handler relative to the effective SAM code directory.
  */
-function extractSamFunctionRoutes(
+function resolveSamHandler(
   functionName: string,
   functionProperties: SamFunctionProperties,
-  resolvedEnvironment: Record<string, string>,
-): RouteDefinition[] {
-  const routes: RouteDefinition[] = [];
-  const rawEvents = functionProperties.Events;
-
+  metadata?: SamResource["Metadata"],
+): string {
   for (const field of ["Handler", "CodeUri"] as const) {
     if (functionProperties[field] !== undefined && typeof functionProperties[field] !== "string") {
       throw new Error(`Invalid ${field} for function ${functionName}; expected a string`);
@@ -526,13 +534,57 @@ function extractSamFunctionRoutes(
   const rawHandler = functionProperties.Handler || "index.handler";
   const codeUri = functionProperties.CodeUri?.trim();
 
-  // Include the function's code directory.
   let fullHandler = rawHandler;
+  const entryPoints =
+    metadata?.BuildMethod === "esbuild" ? metadata.BuildProperties?.EntryPoints : undefined;
+  if (entryPoints !== undefined) {
+    if (
+      !Array.isArray(entryPoints) ||
+      entryPoints.length === 0 ||
+      !entryPoints.every((entry): entry is string => typeof entry === "string" && !!entry.trim())
+    ) {
+      throw new Error(
+        `Invalid esbuild EntryPoints for function ${functionName}; expected a non-empty array of file paths`,
+      );
+    }
+    const dot = rawHandler.lastIndexOf(".");
+    if (dot <= 0 || dot === rawHandler.length - 1) {
+      throw new Error(`Invalid Handler for function ${functionName}; expected file.function`);
+    }
+    const moduleName = path.posix.basename(rawHandler.slice(0, dot).replace(/\\/g, "/"));
+    const candidates = entryPoints.map(entry => entry.trim().replace(/\\/g, "/"));
+    const matches =
+      candidates.length === 1
+        ? candidates
+        : candidates.filter(
+            entry => path.posix.basename(entry, path.posix.extname(entry)) === moduleName,
+          );
+    if (matches.length !== 1) {
+      throw new Error(
+        `Cannot select esbuild EntryPoints for function ${functionName}; use one entry point or a unique file matching the Handler module`,
+      );
+    }
+    fullHandler = `${matches[0]}.${rawHandler.slice(dot + 1)}`;
+  }
+
+  // Entry points are relative to the function's effective code directory.
   if (codeUri && codeUri !== "." && codeUri !== "./") {
     // Normalize path separators.
     const normalizedUri = codeUri.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "");
-    fullHandler = `${normalizedUri}/${rawHandler}`;
+    fullHandler = `${normalizedUri}/${fullHandler}`;
   }
+  return fullHandler;
+}
+
+/** Normalize HTTP routes using the same handler as direct Lambda invocations. */
+function extractSamFunctionRoutes(
+  functionName: string,
+  functionProperties: SamFunctionProperties,
+  resolvedEnvironment: Record<string, string>,
+  fullHandler: string,
+): RouteDefinition[] {
+  const routes: RouteDefinition[] = [];
+  const rawEvents = functionProperties.Events;
 
   const eventEntries: SamEventDefinition[] = Array.isArray(rawEvents)
     ? rawEvents
@@ -654,13 +706,19 @@ export async function loadSamConfig(
       continue;
     }
 
-    const properties = resourceConfig.Properties || {};
+    const properties: SamFunctionProperties = {
+      ...(resourceType === "AWS::Serverless::Function"
+        ? { CodeUri: finalConfig.Globals?.Function?.CodeUri }
+        : {}),
+      ...resourceConfig.Properties,
+    };
     const functionEnv = resolveSamEnvironmentMap(
       properties.Environment?.Variables,
       globalEnvironment,
     );
 
-    const functionRoutes = extractSamFunctionRoutes(resourceName, properties, functionEnv);
+    const handler = resolveSamHandler(resourceName, properties, resourceConfig.Metadata);
+    const functionRoutes = extractSamFunctionRoutes(resourceName, properties, functionEnv, handler);
     const name = resolveCloudFormationRef(resourceName, { ...fullSamOptions, parameters });
     if (typeof name !== "string" || !/^[\w-]{1,64}$/.test(name))
       throw new Error(
@@ -672,15 +730,10 @@ export async function loadSamConfig(
     })!;
     if (arns.has(arn)) throw new Error(`Duplicate FunctionName for ${resourceName}.`);
     arns.add(arn);
-    const codeUri = (properties.CodeUri || "")
-      .replace(/\\/g, "/")
-      .replace(/^\.\//, "")
-      .replace(/\/$/, "");
-    const handler = properties.Handler || "index.handler";
     functions.push({
       functionName: resourceName,
       arn,
-      handler: codeUri && codeUri !== "." ? `${codeUri}/${handler}` : handler,
+      handler,
       environment: functionEnv,
     });
     for (const route of functionRoutes) route.arn = arn;

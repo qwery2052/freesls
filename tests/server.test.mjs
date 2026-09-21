@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import http from "node:http";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { startServer, normalizeBasePath, combinePaths } from "../dist/server.js";
+import {
+  startServer,
+  normalizeBasePath,
+  combinePaths,
+  createLambdaExecutor,
+} from "../dist/server.js";
+import { loadSamConfig } from "../dist/sam-parser.js";
 
 async function fixture(t, files, definitions, defaultServerOptions = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), "freesls-server-"));
@@ -60,6 +66,66 @@ async function fixture(t, files, definitions, defaultServerOptions = {}) {
   }
   return { request: await listen(), listen, directory };
 }
+
+test("SAM esbuild source handlers execute through HTTP and direct Lambda invocation", async t => {
+  const environment = { ...process.env };
+  t.after(() => {
+    for (const key of Object.keys(process.env)) if (!(key in environment)) delete process.env[key];
+    Object.assign(process.env, environment);
+  });
+  const { directory, listen } = await fixture(t, {}, []);
+  const sourceDirectory = path.join(directory, "code/src/functions/create-messaging-campaing");
+  await mkdir(sourceDirectory, { recursive: true });
+  await writeFile(
+    path.join(sourceDirectory, "handler.ts"),
+    `
+    export async function createMessagingCampaignHandler(event: { path?: string }) {
+      return { statusCode: 200, body: JSON.stringify({ path: event.path || 'scheduled' }) };
+    }
+  `,
+  );
+  await writeFile(
+    path.join(directory, "template.yaml"),
+    JSON.stringify({
+      Globals: { Function: { CodeUri: "code" } },
+      Resources: {
+        CreateMessagingCampaingFunction: {
+          Type: "AWS::Serverless::Function",
+          Metadata: {
+            BuildMethod: "esbuild",
+            BuildProperties: {
+              EntryPoints: ["src/functions/create-messaging-campaing/handler.ts"],
+            },
+          },
+          Properties: {
+            Handler: "handler.createMessagingCampaignHandler",
+            Events: {
+              Api: {
+                Type: "Api",
+                Properties: { Path: "/create-messaging-campaing", Method: "post" },
+              },
+            },
+          },
+        },
+      },
+    }),
+  );
+  const loaded = await loadSamConfig(directory, {
+    stage: "local",
+    region: "us-east-1",
+    params: {},
+    resolveSSM: false,
+    scheduler: true,
+  });
+  const request = await listen(loaded.routes);
+  const response = await request("/create-messaging-campaing", { method: "POST" });
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.json(), { path: "/create-messaging-campaing" });
+  const execute = createLambdaExecutor({ workingDir: directory });
+  const direct = await execute(loaded.functions[0], {});
+  assert.equal(direct.statusCode, 200);
+  assert.deepEqual(JSON.parse(direct.body), { path: "scheduled" });
+});
 
 test("circular controllers and services share instances and reload between requests", async t => {
   const service = value => `import { controller } from './app.module';
