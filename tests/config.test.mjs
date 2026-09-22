@@ -801,6 +801,105 @@ test("local identities use the resolved service and bounded, distinct generated 
   assert.equal(loaded.globalEnv.ROLE_A.split("/").at(-1).length, 64);
 });
 
+test("SAM resolves AWS::SSM::Parameter::Value<> like serverless ssm references", async t => {
+  const directory = await fixture(t, {
+    "ssm.env": "/app/secret=from-ssm-env\n",
+    "template.yaml": `Description: demo
+Parameters:
+  SecretId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /app/secret
+  AbsentSecret:
+    Type: AWS::SSM::Parameter::Value<List<String>>
+    Default: /app/absent
+  PlainPath:
+    Type: String
+    Default: /app/secret
+Resources:
+  Target:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handler.run
+      Environment:
+        Variables:
+          SECRET_ID: !Ref SecretId
+          ABSENT: !Ref AbsentSecret
+          PLAIN_PATH: !Ref PlainPath
+          SUB: !Sub "\${SecretId}"
+`,
+  });
+  const loaded = await loadSamConfig(directory, options);
+  const environment = loaded.functions[0].environment;
+  assert.equal(environment.SECRET_ID, "from-ssm-env");
+  assert.equal(environment.SUB, "from-ssm-env");
+  assert.equal(environment.ABSENT, "mock-absent");
+  assert.equal(environment.PLAIN_PATH, "/app/secret");
+});
+
+test("SAM fetches SSM value parameters from Parameter Store", async t => {
+  const requestedNames = [];
+  t.mock.method(SSMClient.prototype, "send", async command => {
+    for (const name of command.input.Names) requestedNames.push(name);
+    return { Parameters: command.input.Names.map(name => ({ Name: name, Value: `value${name}` })) };
+  });
+  const directory = await fixture(t, {
+    "template.yaml": `Description: demo
+Parameters:
+  SecretId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /app/secret
+Resources:
+  Target:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handler.run
+      Environment:
+        Variables:
+          SECRET_ID: !Ref SecretId
+`,
+  });
+  const loaded = await loadSamConfig(directory, { ...options, resolveSSM: true });
+  assert.deepEqual(requestedNames, ["/app/secret"]);
+  assert.equal(loaded.functions[0].environment.SECRET_ID, "value/app/secret");
+});
+
+test("SAM honors --param overrides and reports missing SSM value parameters", async t => {
+  let awsCalls = 0;
+  let invalidParameters = [];
+  t.mock.method(SSMClient.prototype, "send", async () => {
+    awsCalls++;
+    return { Parameters: [], InvalidParameters: invalidParameters };
+  });
+  const directory = await fixture(t, {
+    "template.yaml": `Description: demo
+Parameters:
+  SecretId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /app/secret
+Resources:
+  Target:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handler.run
+      Environment:
+        Variables:
+          SECRET_ID: !Ref SecretId
+`,
+  });
+  const overridden = await loadSamConfig(directory, {
+    ...options,
+    resolveSSM: true,
+    params: { SecretId: "literal-value" },
+  });
+  assert.equal(awsCalls, 0);
+  assert.equal(overridden.functions[0].environment.SECRET_ID, "literal-value");
+  invalidParameters = ["/app/secret"];
+  await assert.rejects(
+    loadSamConfig(directory, { ...options, resolveSSM: true }),
+    /SSM parameters not found/,
+  );
+});
+
 test("local resolution mode makes no AWS SSM calls", async t => {
   let awsCalls = 0;
   t.mock.method(SSMClient.prototype, "send", async () => {

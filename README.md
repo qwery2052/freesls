@@ -17,7 +17,7 @@
 </p>
 
 ```
-   /\_/\   FreeSLS v0.4.0-beta.11  [SLS] / [AWS SAM]
+   /\_/\   FreeSLS v0.4.0  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
    > ^ <   ● Service: example-service [stage: dev]
 ────────────────────────────────────────────────────────────
@@ -29,7 +29,7 @@
 > **Active Development & Current Scope**
 >
 > - 🚧 **Work in Progress:** FreeSLS is under active and continuous development. Improvements, fixes, and new features are being released regularly.
-> - 🧪 **AWS SAM Mode (Experimental):** Running AWS SAM projects (`--sam`) is currently experimental and under active development. Emulation of complex CloudFormation features is partial.
+> - ⚠️ **AWS SAM Mode:** Running AWS SAM projects (`--sam`) is supported and has been validated on real projects. Use it with caution: some advanced CloudFormation features may still fail.
 > - ⚡ **Current Scope:** FreeSLS currently focuses specifically on running **AWS Lambda functions invoked via HTTP and HTTP API events (API Gateway)** for both **Serverless Framework** (`serverless.yml`) and **AWS SAM** (`template.yaml` / `template.yml`). Support for additional triggers (such as SQS, SNS, EventBridge, S3) is planned for upcoming releases. Feedback and suggestions are warmly welcomed!
 
 ---
@@ -114,7 +114,7 @@ Or add a script to your `package.json`:
 
 | Flag                                       | Alias            | Description                                                                   | Default                          |
 | ------------------------------------------ | ---------------- | ----------------------------------------------------------------------------- | -------------------------------- |
-| [`--sam`](#--sam)                          | `-sam`           | 🧪 **Experimental:** Uses AWS SAM template (`template.yaml` / `template.yml`) | `false`                          |
+| [`--sam`](#--sam)                          | `-sam`           | ⚠️ **Use with caution:** Uses AWS SAM template (`template.yaml` / `template.yml`) | `false`                          |
 | [`--sls`](#--sls)                          | `-sls`           | Uses Serverless Framework template (`serverless.yml`)                         | `true` (default)                 |
 | [`--stage`](#--stage)                      | `-s`             | Target deployment stage (`dev`, `staging`, `prod`)                            | `develop`                        |
 | [`--region`](#--region)                    | `-r`             | AWS region for SSM and Lambda context                                         | `us-east-1`                      |
@@ -130,9 +130,9 @@ Or add a script to your `package.json`:
 | [`--version`](#--version)                  | `-v`, `-V`       | Displays the installed FreeSLS version                                        |                                  |
 
 > [!WARNING]
-> **AWS SAM Mode (`--sam`) is Experimental**
+> **Use AWS SAM Mode (`--sam`) with Caution**
 >
-> Emulation for AWS SAM is currently in active **beta / experimental** development. Supported intrinsic functions include `Ref`, `Fn::GetAtt`, `Fn::Sub`, and SSM dynamic references (`{{resolve:ssm:...}}`). Advanced CloudFormation capabilities (such as complex `Mappings`, nested stacks, or unsupported intrinsic functions) are partial.
+> AWS SAM support has been tested on real projects, but it is still evolving. Supported intrinsic functions include `Ref`, `Fn::GetAtt`, `Fn::Sub`, and SSM dynamic references (`{{resolve:ssm:...}}`). Advanced CloudFormation capabilities (such as complex `Mappings`, nested stacks, or unsupported intrinsic functions) may fail.
 
 ### CLI Reference
 
@@ -148,7 +148,7 @@ freesls --sls -s dev
 
 #### `--sam`
 
-Use an AWS SAM template (`template.yaml` / `template.yml`). Experimental (see the warning above).
+Use an AWS SAM template (`template.yaml` / `template.yml`). Use with caution (see the warning above).
 
 For functions with `Metadata.BuildMethod: esbuild`, FreeSLS runs the source file from `Metadata.BuildProperties.EntryPoints` using the exported function named in `Handler`. Entry points are relative to `Properties.CodeUri`, falling back to `Globals.Function.CodeUri` for SAM functions, then the project directory. With multiple entry points, exactly one file's basename (without extension) must match the Handler module; ambiguous or unmatched lists fail explicitly. Without entry points, the usual `CodeUri` + `Handler` resolution applies. FreeSLS executes the source directly; it does not run an esbuild bundle or apply other esbuild build options.
 

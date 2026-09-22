@@ -149,6 +149,16 @@ function resolveSsmParameterValue(ssmPath: string, ssmValues?: Map<string, strin
 }
 
 /**
+ * CloudFormation resolves AWS::SSM::Parameter::Value<...> defaults against Parameter Store.
+ * AWS::SSM::Parameter::Name and plain String parameters keep their literal value.
+ */
+function isSsmValueParameterType(parameterType?: string): boolean {
+  return (
+    typeof parameterType === "string" && parameterType.startsWith("AWS::SSM::Parameter::Value<")
+  );
+}
+
+/**
  * Resolve explicit references in resource names.
  */
 function resolveTemplatePropertyString(
@@ -648,6 +658,19 @@ export async function loadSamConfig(
 
   const parameters = buildSamParameters(initialConfig.Parameters, options.params, options.stage);
 
+  // SSM value parameters resolve their default path to the stored value, like ${ssm:...}.
+  // CLI --param overrides are literal values and take precedence.
+  const ssmValueParameters: Array<{ name: string; path: string }> = [];
+  for (const [parameterName, parameterDefinition] of Object.entries(
+    initialConfig.Parameters || {},
+  )) {
+    if (!isSsmValueParameterType(parameterDefinition.Type)) continue;
+    if (options.params[parameterName] !== undefined) continue;
+    const defaultPath =
+      typeof parameterDefinition.Default === "string" ? parameterDefinition.Default.trim() : "";
+    if (defaultPath) ssmValueParameters.push({ name: parameterName, path: defaultPath });
+  }
+
   const templateResources = initialConfig.Resources || {};
 
   const references = new Map<string, string>();
@@ -668,12 +691,17 @@ export async function loadSamConfig(
     ssmParameterPaths.push(...extractSSMPaths(text));
     return text;
   });
+  ssmParameterPaths.push(...ssmValueParameters.map(entry => entry.path));
   const ssmValues = await resolveSSMValues(
     ssmParameterPaths,
     options.region,
     options.resolveSSM,
     workingDirectory,
   );
+
+  for (const { name, path: parameterPath } of ssmValueParameters) {
+    parameters[name] = resolveSsmParameterValue(parameterPath, ssmValues);
+  }
 
   const fullSamOptions = {
     ...samOptions,
