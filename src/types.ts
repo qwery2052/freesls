@@ -27,18 +27,23 @@ export interface ServerlessConfig {
   functions?: Record<string, ServerlessFunction>;
 }
 
-export interface RouteDefinition {
+export interface FunctionDefinition {
   functionName: string;
-  method: string;
-  path: string;
   handler: string;
   environment: Record<string, string>;
+  arn?: string;
+}
+
+export interface RouteDefinition extends FunctionDefinition {
+  method: string;
+  path: string;
   payloadVersion?: "1.0" | "2.0";
 }
 
 export interface LoadResult {
   config: ServerlessConfig;
   routes: RouteDefinition[];
+  functions?: FunctionDefinition[];
   globalEnv: Record<string, string>;
   framework?: "serverless" | "sam";
 }

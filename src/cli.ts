@@ -8,9 +8,12 @@ import {
   printBanner,
   printEnvironmentSummary,
   printRoutes,
+  printSchedulerEvent,
+  printLambdaStart,
   printSsmResolutionError,
 } from "./printer.js";
-import { startServer } from "./server.js";
+import { startServer, createLambdaExecutor } from "./server.js";
+import { LocalScheduler, startScheduler } from "./scheduler.js";
 import { SSMParameterNotFoundError } from "./ssm.js";
 import { DEFAULT_OFFLINE_ENV } from "./types.js";
 
@@ -19,7 +22,7 @@ const program = new Command();
 /**
  * Split at the first equals sign so encoded values remain intact.
  */
-function parseCliParameters(parameterEntries?: string[]): Record<string, string> {
+function parseCliParameters(parameterEntries?: string[], flag = "--param"): Record<string, string> {
   if (!parameterEntries) return {};
 
   const parsedParameters: Record<string, string> = {};
@@ -27,7 +30,7 @@ function parseCliParameters(parameterEntries?: string[]): Record<string, string>
     const assignmentIndex = parameterEntry.indexOf("=");
     const parameterKey = parameterEntry.slice(0, assignmentIndex).trim();
     if (assignmentIndex < 1 || !parameterKey) {
-      throw new Error("Invalid --param assignment. Expected a nonempty key followed by =value.");
+      throw new Error(`Invalid ${flag} assignment. Expected a nonempty key followed by =value.`);
     }
     parsedParameters[parameterKey] = parameterEntry.slice(assignmentIndex + 1).trim();
   }
@@ -38,7 +41,7 @@ function parseCliParameters(parameterEntries?: string[]): Record<string, string>
 program
   .name("freesls")
   .description("Offline API Gateway & Lambda Runner (Serverless Framework & AWS SAM)")
-  .version("0.3.7", "-v, --version", "Output the current version number")
+  .version("0.4.0", "-v, --version", "Output the current version number")
   .option("-s, --stage <stage>", "Deployment stage", "develop")
   .option("-r, --region <region>", "AWS region", "us-east-1")
   .option("-p, --port <port>", "Local HTTP server port", "4000")
@@ -52,9 +55,20 @@ program
   .option("--sam", "Use an AWS SAM template (template.yaml/template.yml)")
   .option("--sls", "Use Serverless Framework (serverless.yml) [default]")
   .option("--no-ssm", "Disable AWS SSM queries and use local fallbacks or mocks")
+  .option("--scheduler", "Enable the local one-time Lambda Scheduler endpoint")
+  .option(
+    "--cf-value <values...>",
+    "Explicit reference values: LogicalId.Attribute=value or Outputs.Key=value",
+  )
   .option("--show-env", "Display full environment values without masking", false)
   .option("-d, --debug", "Enable verbose lifecycle debug logging with stage timings", false)
   .action(async commandOptions => {
+    let schedulerServer: Awaited<ReturnType<typeof startScheduler>> | undefined;
+    const priorEndpoint = process.env.AWS_ENDPOINT_URL_SCHEDULER;
+    const restoreEndpoint = () => {
+      if (priorEndpoint === undefined) delete process.env.AWS_ENDPOINT_URL_SCHEDULER;
+      else process.env.AWS_ENDPOINT_URL_SCHEDULER = priorEndpoint;
+    };
     try {
       const serverPort = Number(commandOptions.port);
       if (
@@ -100,9 +114,19 @@ program
         region: commandOptions.region,
         params: customParameters,
         resolveSSM: commandOptions.ssm !== false,
+        scheduler: Boolean(commandOptions.scheduler),
+        cfValues: commandOptions.cfValue
+          ? parseCliParameters(commandOptions.cfValue, "--cf-value")
+          : undefined,
       };
 
-      const { config, routes, globalEnv, framework } = isSamMode
+      const {
+        config,
+        routes,
+        functions = [],
+        globalEnv,
+        framework,
+      } = isSamMode
         ? await loadSamConfig(process.cwd(), parserOptions)
         : await loadServerlessConfig(process.cwd(), parserOptions);
 
@@ -117,6 +141,52 @@ program
       printEnvironmentSummary(globalEnv, Boolean(commandOptions.showEnv));
       printRoutes(routes, serverPort, basePath);
 
+      if (commandOptions.scheduler) {
+        const execute = createLambdaExecutor({
+          port: serverPort,
+          workingDir: process.cwd(),
+          stage: commandOptions.stage,
+          region: commandOptions.region,
+          debug: Boolean(commandOptions.debug),
+        });
+        const registry = new Map(functions.filter(fn => fn.arn).map(fn => [fn.arn!, fn]));
+        if (registry.size !== functions.length) {
+          throw new Error(
+            "Duplicate or missing local Lambda ARN. Use unique function names and --cf-value overrides.",
+          );
+        }
+        const resolveTargetName = (arn: string) => registry.get(arn)?.functionName ?? arn;
+        const scheduler = new LocalScheduler(
+          commandOptions.region,
+          new Set(registry.keys()),
+          async (arn, payload) => {
+            const target = registry.get(arn);
+            if (!target) throw new Error("Target is no longer registered");
+            printLambdaStart(target.functionName);
+            // Acceptance and asynchronous handler completion are separate boundaries.
+            void Promise.resolve()
+              .then(() => execute(target, payload))
+              .catch(() => {
+                console.error(
+                  `[FreeSLS Lambda] Scheduled invocation failed for ${target.functionName}. Inspect the handler with --debug; payload and error contents are omitted.`,
+                );
+              });
+          },
+          undefined,
+          () => {},
+          event => printSchedulerEvent(event, resolveTargetName),
+        );
+        schedulerServer = await startScheduler(scheduler);
+        process.env.AWS_ENDPOINT_URL_SCHEDULER = schedulerServer.endpoint;
+        for (const fn of functions)
+          fn.environment.AWS_ENDPOINT_URL_SCHEDULER = schedulerServer.endpoint;
+        for (const route of routes)
+          route.environment.AWS_ENDPOINT_URL_SCHEDULER = schedulerServer.endpoint;
+        console.log(
+          `Local Scheduler: ${schedulerServer.endpoint} (at schedules, in-memory). SDK v3 clients need signing credentials; existing AWS credentials are preserved.`,
+        );
+      }
+
       const serverInstance = await startServer(routes, serverPort, process.cwd(), {
         stage: commandOptions.stage,
         region: commandOptions.region,
@@ -124,8 +194,13 @@ program
         debug: Boolean(commandOptions.debug),
       });
 
-      const handleShutdown = () => {
+      let shuttingDown = false;
+      const handleShutdown = async () => {
+        if (shuttingDown) return;
+        shuttingDown = true;
         console.log(pc.dim("\n🐾 Shutting down FreeSLS..."));
+        await schedulerServer?.close();
+        restoreEndpoint();
         serverInstance.close(() => {
           process.exit(0);
         });
@@ -134,6 +209,8 @@ program
       process.on("SIGINT", handleShutdown);
       process.on("SIGTERM", handleShutdown);
     } catch (error) {
+      await schedulerServer?.close();
+      restoreEndpoint();
       if (error instanceof SSMParameterNotFoundError) {
         printSsmResolutionError(error.missingParameters, {
           profile: error.profile,

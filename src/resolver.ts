@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export interface ResolveContext {
   stage: string;
   region: string;
@@ -5,6 +7,34 @@ export interface ResolveContext {
   params: Record<string, string>;
   rawConfig: any;
   ssmValues?: Map<string, string>;
+  references?: Map<string, string>;
+  strictReferences?: boolean;
+}
+
+/** CloudFormation-generated role names are bounded; keep local defaults stable and distinct. */
+export function localRoleName(prefix: string, logicalId: string): string {
+  const name = `${prefix}-${logicalId}`;
+  return boundedLocalName(name);
+}
+
+/** SAM defaults must be valid Lambda names even with long IDs or directory names. */
+export function localFunctionName(prefix: string, logicalId: string): string {
+  const name = `${prefix}-${logicalId}`;
+  return boundedLocalName(name, name.replace(/[^a-zA-Z0-9_-]/g, "-"));
+}
+
+function boundedLocalName(original: string, normalized = original): string {
+  return normalized.length <= 64 && normalized === original
+    ? normalized
+    : `${normalized.slice(0, 55)}-${createHash("sha256").update(original).digest("hex").slice(0, 8)}`;
+}
+
+export function awsPartition(region: string): string {
+  if (region.startsWith("cn-")) return "aws-cn";
+  if (region.startsWith("us-gov-")) return "aws-us-gov";
+  if (/^(us-iso|eu-isoe)/.test(region))
+    throw new Error("Unsupported AWS partition; use a commercial, China or GovCloud region.");
+  return "aws";
 }
 
 /**
@@ -17,6 +47,119 @@ export function getNestedValue(targetObject: any, pathExpression: string): any {
       (currentObject, propertyKey) => (currentObject ? currentObject[propertyKey] : undefined),
       targetObject,
     );
+}
+
+export function resolvePseudoParameter(
+  name: string,
+  context?: Partial<ResolveContext>,
+): string | null {
+  const configured = context?.references?.get(name);
+  if (configured !== undefined) return configured;
+  const normalized = name.trim();
+  const upper = normalized.toUpperCase();
+  switch (upper) {
+    case "AWS::REGION":
+      return context?.region || process.env.AWS_REGION || "us-east-1";
+    case "AWS::ACCOUNTID":
+      return "123456789012";
+    case "AWS::PARTITION":
+      return awsPartition(context?.region || "us-east-1");
+    case "AWS::STACKNAME":
+      return context ? `${context.serviceName}-${context.stage}` : "local-stack";
+    case "AWS::STACKID":
+      return `arn:${awsPartition(context?.region || "us-east-1")}:cloudformation:${context?.region || "us-east-1"}:123456789012:stack/${context ? `${context.serviceName}-${context.stage}` : "local-stack"}/mock-stack-id`;
+    case "AWS::URLSUFFIX":
+      return context?.region?.startsWith("cn-") ? "amazonaws.com.cn" : "amazonaws.com";
+    default:
+      return null;
+  }
+}
+
+/** Ref/GetAtt have different shapes and contracts; reuse their validation in Sub maps. */
+export function resolveIntrinsicReference(value: unknown, context?: ResolveContext): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).length !== 1) return null;
+  const scalar = (text: string) => (context ? resolveVariables(text, context, true) : text);
+  if (typeof record.Ref === "string") return resolvePseudoParameter(scalar(record.Ref), context);
+  const target = record["Fn::GetAtt"];
+  const key =
+    typeof target === "string" && target.includes(".")
+      ? target
+      : Array.isArray(target) &&
+          target.length === 2 &&
+          target.every(part => typeof part === "string")
+        ? target.join(".")
+        : null;
+  return key === null ? null : (context?.references?.get(scalar(key)) ?? null);
+}
+
+/**
+ * Resolve CloudFormation !Sub / Fn::Sub expressions.
+ */
+export function resolveCloudFormationSub(
+  subValue: unknown,
+  context?: ResolveContext,
+): string | null {
+  let template: string;
+  let localVars: Record<string, unknown> = {};
+
+  if (typeof subValue === "string") {
+    template = subValue;
+  } else if (
+    Array.isArray(subValue) &&
+    subValue.length === 2 &&
+    typeof subValue[0] === "string" &&
+    subValue[1] &&
+    typeof subValue[1] === "object" &&
+    !Array.isArray(subValue[1])
+  ) {
+    template = subValue[0];
+    localVars = subValue[1] as Record<string, unknown>;
+  } else {
+    return null;
+  }
+
+  // Resolve local variable mappings first
+  const resolvedLocalVars: Record<string, string> = {};
+  for (const [key, val] of Object.entries(localVars)) {
+    if (typeof val === "string") {
+      resolvedLocalVars[key] = context ? resolveVariables(val, context, true) : val;
+    } else if (val && typeof val === "object") {
+      const resolved = resolveIntrinsicReference(val, context);
+      if (resolved === null) return null;
+      resolvedLocalVars[key] = resolved;
+    } else if (val != null) {
+      resolvedLocalVars[key] = String(val);
+    }
+  }
+
+  // Discovery expands nested Serverless paths, but never inserts SSM data.
+  template = context ? resolveVariables(template, context, false) : template;
+  let unresolved = false;
+  const result = template.replace(/\$\{([^{}]+)\}/g, (match, expression: string) => {
+    if (expression.startsWith("!")) {
+      return `\${${expression.slice(1)}}`;
+    }
+    const trimmed = expression.trim();
+    if (Object.hasOwn(resolvedLocalVars, trimmed)) {
+      return resolvedLocalVars[trimmed];
+    }
+    const pseudo = resolvePseudoParameter(trimmed, context);
+    if (pseudo !== null) {
+      return pseudo;
+    }
+    if (context) {
+      const resolved = resolveVariables(`\${${trimmed}}`, context, true);
+      if (resolved !== `\${${trimmed}}`) {
+        return resolved;
+      }
+    }
+    unresolved = true;
+    return match;
+  });
+
+  return unresolved ? null : result;
 }
 
 /**
@@ -43,7 +186,7 @@ function resolveSingleTerm(
   const [, variableSource, variableExpression] = regexMatch;
   const trimmedExpression = variableExpression.trim();
 
-  switch (variableSource) {
+  switch (variableSource.toLowerCase()) {
     case "sls":
       return trimmedExpression === "stage" ? context.stage : null;
     case "opt":
@@ -74,7 +217,8 @@ function resolveSingleTerm(
 
     case "aws":
       if (trimmedExpression === "region") return context.region;
-      if (trimmedExpression === "accountId") return "123456789012";
+      if (trimmedExpression === "accountId")
+        return context.references?.get("AWS::AccountId") ?? "123456789012";
       return null;
 
     case "ssm": {

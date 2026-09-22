@@ -6,6 +6,7 @@ import test from "node:test";
 import { loadServerlessConfig, parseYaml } from "../dist/parser.js";
 import { loadSamConfig, resolveSamVariables } from "../dist/sam-parser.js";
 import { extractSSMPaths, resolveVariables } from "../dist/resolver.js";
+import { SSMClient } from "@aws-sdk/client-ssm";
 
 const options = { stage: "local", region: "eu-west-1", params: {}, resolveSSM: false };
 
@@ -500,3 +501,430 @@ Resources:
   assert.equal(result.routes[0].environment.IS_LOCAL, "true");
 });
 
+test("Serverless resolves CloudFormation !Sub and pseudo-parameters in environment variables", async t => {
+  const directory = await fixture(t, {
+    "serverless.yml": `service: test-service
+provider:
+  name: aws
+  environment:
+    GLOBAL_SUB: !Sub "arn:aws:sqs:\${AWS::Region}:\${AWS::AccountId}:my-queue"
+    GLOBAL_REF: !Ref "AWS::Region"
+functions:
+  create-messaging-campaign:
+    handler: handler.test
+    events:
+      - http:
+          path: create-messaging-campaign
+          method: post
+    environment:
+      SEND_PUSH_BROADCAST_LAMBDA_ARN: !Sub arn:aws:lambda:\${AWS::Region}:\${AWS::AccountId}:function:\${self:service}-\${sls:stage}-send-push-broadcast
+      SCHEDULER_ROLE_ARN: !GetAtt EventBridgeSchedulerExecutionRole.Arn
+      SUB_WITH_MAP: !Sub
+        - "arn:aws:sns:\${AWS::Region}:\${AWS::AccountId}:\${TopicName}"
+        - TopicName: "my-topic"
+`,
+  });
+
+  const result = await loadServerlessConfig(directory, options);
+  assert.equal(result.globalEnv.GLOBAL_SUB, "arn:aws:sqs:eu-west-1:123456789012:my-queue");
+  assert.equal(result.globalEnv.GLOBAL_REF, "eu-west-1");
+
+  const routeEnv = result.routes[0].environment;
+  assert.equal(
+    routeEnv.SEND_PUSH_BROADCAST_LAMBDA_ARN,
+    "arn:aws:lambda:eu-west-1:123456789012:function:test-service-local-send-push-broadcast",
+  );
+  assert.equal(routeEnv.SCHEDULER_ROLE_ARN, "");
+  assert.equal(routeEnv.SUB_WITH_MAP, "arn:aws:sns:eu-west-1:123456789012:my-topic");
+});
+
+test("Sub preserves SSM data in mappings and templates and rejects unsupported nested objects", async t => {
+  const directory = await fixture(t, {
+    "ssm.env": "/value=${opt:stage}\n/other=${MissingResource}",
+    "serverless.yml": `service: demo
+provider:
+  environment:
+    MAPPED: !Sub ['prefix-\${Value}', {Value: '\${ssm:/value}'}]
+    DIRECT: !Sub 'prefix-\${ssm:/other}'
+    ESCAPED: !Sub '\${!Name}'
+`,
+  });
+  const loaded = await loadServerlessConfig(directory, options);
+  assert.equal(loaded.globalEnv.MAPPED, "prefix-${opt:stage}");
+  assert.equal(loaded.globalEnv.DIRECT, "prefix-${MissingResource}");
+  assert.equal(loaded.globalEnv.ESCAPED, "${Name}");
+  for (const intrinsic of [
+    { "Fn::Sub": ["prefix-${Value}", { Value: { "Fn::Join": ["-", ["sensitive-value", "b"]] } }] },
+    { "Fn::Sub": "${MissingResource}" },
+  ]) {
+    await writeFile(
+      path.join(directory, "serverless.yml"),
+      JSON.stringify({ service: "demo", provider: { environment: { SECRET: intrinsic } } }),
+    );
+    await assert.rejects(
+      loadServerlessConfig(directory, options),
+      e => /environment variable SECRET/.test(e.message) && !e.message.includes("sensitive-value"),
+    );
+  }
+});
+
+test("Scheduler mode resolves local roles with paths, partition-aware functions and rejects unknown resources", async t => {
+  const config = {
+    service: "demo",
+    provider: {
+      environment: {
+        ROLE: { "Fn::GetAtt": "Role.Arn" },
+        TARGET: { "Fn::GetAtt": "TargetLambdaFunction.Arn" },
+      },
+    },
+    resources: {
+      Resources: {
+        Role: { Type: "AWS::IAM::Role", Properties: { RoleName: "scheduler", Path: "/team/" } },
+      },
+    },
+    functions: { target: { name: "custom-target", handler: "index.handler" } },
+  };
+  const directory = await fixture(t, { "serverless.yml": JSON.stringify(config) });
+  const loaded = await loadServerlessConfig(directory, {
+    ...options,
+    region: "cn-north-1",
+    scheduler: true,
+  });
+  assert.equal(loaded.globalEnv.ROLE, "arn:aws-cn:iam::123456789012:role/team/scheduler");
+  assert.equal(loaded.globalEnv.TARGET, loaded.functions[0].arn);
+  assert.equal(
+    loaded.functions[0].arn,
+    "arn:aws-cn:lambda:cn-north-1:123456789012:function:custom-target",
+  );
+  config.provider.environment.ROLE = { "Fn::GetAtt": "Unknown.Arn" };
+  await writeFile(path.join(directory, "serverless.yml"), JSON.stringify(config));
+  await assert.rejects(
+    loadServerlessConfig(directory, { ...options, scheduler: true }),
+    /--cf-value/,
+  );
+  const overridden = await loadServerlessConfig(directory, {
+    ...options,
+    scheduler: true,
+    cfValues: { "Unknown.Arn": "explicit" },
+  });
+  assert.equal(overridden.globalEnv.ROLE, "explicit");
+});
+
+test("SAM registers non-HTTP targets and resolves their exact ARNs", async t => {
+  const directory = await fixture(t, {
+    "template.yaml": `Description: demo
+Globals:
+  Function:
+    Environment:
+      Variables:
+        TARGET: !GetAtt Target.Arn
+Resources:
+  Target:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: custom-target
+      CodeUri: src
+      Handler: handler.run
+`,
+  });
+  const loaded = await loadSamConfig(directory, { ...options, scheduler: true });
+  assert.equal(loaded.routes.length, 0);
+  assert.equal(loaded.functions[0].handler, "src/handler.run");
+  assert.equal(loaded.globalEnv.TARGET, loaded.functions[0].arn);
+});
+
+test("SAM resolves esbuild entry points relative to effective CodeUri", async t => {
+  const cases = [
+    { entries: ["src/handler.ts"], expected: "global/src/handler.ts.run" },
+    { entries: ["src/main.ts"], expected: "global/src/main.ts.run" },
+    { entries: ["src/other.ts", "src/handler.ts"], expected: "global/src/handler.ts.run" },
+    { entries: ["src\\handler.ts"], codeUri: "./local/", expected: "local/src/handler.ts.run" },
+    { expected: "global/handler.run" },
+    { entries: ["src/handler.ts"], method: "makefile", expected: "global/handler.run" },
+    { entries: [] },
+    { entries: "src/handler.ts" },
+    { entries: [42] },
+    { entries: [" "] },
+    { entries: ["src/a.ts", "src/b.ts"] },
+    { entries: ["a/handler.ts", "b/handler.ts"] },
+  ];
+  const directory = await fixture(t, {});
+  for (const { entries, expected, codeUri, method = "esbuild" } of cases) {
+    await writeFile(
+      path.join(directory, "template.yaml"),
+      JSON.stringify({
+        Globals: { Function: { CodeUri: "global" } },
+        Resources: {
+          Target: {
+            Type: "AWS::Serverless::Function",
+            Metadata: { BuildMethod: method, BuildProperties: { EntryPoints: entries } },
+            Properties: {
+              Handler: "handler.run",
+              ...(codeUri ? { CodeUri: codeUri } : {}),
+              Events: { Api: { Type: "Api", Properties: { Path: "/target", Method: "post" } } },
+            },
+          },
+        },
+      }),
+    );
+    const result = loadSamConfig(directory, options);
+    if (expected) {
+      const loaded = await result;
+      assert.equal(loaded.functions[0].handler, expected);
+      assert.equal(loaded.routes[0].handler, expected);
+    } else await assert.rejects(result, /EntryPoints for function Target/);
+  }
+});
+
+test("SAM bounds generated names and keeps references and HTTP routes consistent", async t => {
+  const ids = [
+    "RescheduleMessagingCampaignFunction",
+    "RescheduleMessagingCampaignFunctionTwo",
+    "F".repeat(33),
+    "F".repeat(34),
+  ];
+  const directory = await fixture(t, {
+    "template.yaml": JSON.stringify({
+      Description: "A long backend description for messaging services",
+      Resources: Object.fromEntries(
+        ids.map((id, index) => [
+          id,
+          {
+            Type: index % 2 ? "AWS::Lambda::Function" : "AWS::Serverless::Function",
+            Properties: {
+              Handler: "handler.run",
+              Environment: {
+                Variables: {
+                  NAME: { Ref: id },
+                  ARN: { "Fn::GetAtt": [id, "Arn"] },
+                  SUB_ARN: { "Fn::Sub": `\${${id}.Arn}` },
+                },
+              },
+              Events: {
+                Api: { Type: "Api", Properties: { Path: `/endpoint-${index}`, Method: "post" } },
+              },
+            },
+          },
+        ]),
+      ),
+    }),
+  });
+  for (const scheduler of [false, true]) {
+    const loaded = await loadSamConfig(directory, { ...options, scheduler });
+    assert.equal(new Set(loaded.functions.map(fn => fn.arn)).size, ids.length);
+    for (const [index, fn] of loaded.functions.entries()) {
+      assert.match(fn.environment.NAME, /^[a-zA-Z0-9_-]{1,64}$/);
+      assert.equal(fn.arn, `arn:aws:lambda:eu-west-1:123456789012:function:${fn.environment.NAME}`);
+      assert.equal(fn.environment.ARN, fn.arn);
+      assert.equal(fn.environment.SUB_ARN, fn.arn);
+      assert.equal(loaded.routes[index].arn, fn.arn);
+      assert.equal(loaded.routes[index].path, `/endpoint-${index}`);
+    }
+    assert.equal(loaded.functions[2].environment.NAME, `${loaded.config.service}-${ids[2]}`);
+    assert.equal(loaded.functions[3].environment.NAME.length, 64);
+    assert.deepEqual(
+      (await loadSamConfig(directory, { ...options, scheduler })).functions,
+      loaded.functions,
+    );
+  }
+});
+
+test("SAM normalizes directory-based generated names without merging distinct prefixes", () => {
+  const resource = { Target: { Type: "AWS::Serverless::Function" } };
+  const resolve = serviceName =>
+    resolveSamVariables(
+      "${Target}",
+      {},
+      {
+        region: options.region,
+        serviceName,
+        resources: resource,
+      },
+    );
+  assert.match(resolve("my project.v1"), /^[a-zA-Z0-9_-]{1,64}$/);
+  assert.notEqual(resolve("my project.v1"), resolve("my-project-v1"));
+});
+
+test("SAM preserves valid explicit names and rejects invalid explicit names", async t => {
+  const directory = await fixture(t, {});
+  for (const name of ["a".repeat(64), "a".repeat(65), "invalid.name", ""]) {
+    await writeFile(
+      path.join(directory, "template.yaml"),
+      JSON.stringify({
+        Resources: {
+          Target: {
+            Type: "AWS::Serverless::Function",
+            Properties: {
+              FunctionName: { "Fn::Sub": "${Name}" },
+              Handler: "handler.run",
+            },
+          },
+        },
+      }),
+    );
+    const result = loadSamConfig(directory, { ...options, params: { Name: name } });
+    if (name.length === 64)
+      assert.ok((await result).functions[0].arn.endsWith(`:function:${name}`));
+    else await assert.rejects(result, /Invalid FunctionName for Target/);
+  }
+});
+
+test("local identities use the resolved service and bounded, distinct generated role names", async t => {
+  const service = "a-service-name-long-enough-for-generated-roles";
+  const roleA = "EventBridgeSchedulerExecutionRoleOne";
+  const roleB = "EventBridgeSchedulerExecutionRoleTwo";
+  const directory = await fixture(t, {
+    "serverless.yml": JSON.stringify({
+      service: "${param:serviceName}",
+      provider: {
+        environment: {
+          ROLE_A: { "Fn::GetAtt": `${roleA}.Arn` },
+          ROLE_B: { "Fn::GetAtt": `${roleB}.Arn` },
+        },
+      },
+      resources: {
+        Resources: { [roleA]: { Type: "AWS::IAM::Role" }, [roleB]: { Type: "AWS::IAM::Role" } },
+      },
+      functions: { target: { handler: "index.handler" } },
+    }),
+  });
+  const loaded = await loadServerlessConfig(directory, {
+    ...options,
+    scheduler: true,
+    params: { serviceName: service },
+  });
+  assert.equal(
+    loaded.functions[0].arn,
+    `arn:aws:lambda:eu-west-1:123456789012:function:${service}-local-target`,
+  );
+  assert.notEqual(loaded.globalEnv.ROLE_A, loaded.globalEnv.ROLE_B);
+  assert.equal(loaded.globalEnv.ROLE_A.split("/").at(-1).length, 64);
+});
+
+test("SAM resolves AWS::SSM::Parameter::Value<> like serverless ssm references", async t => {
+  const directory = await fixture(t, {
+    "ssm.env": "/app/secret=from-ssm-env\n",
+    "template.yaml": `Description: demo
+Parameters:
+  SecretId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /app/secret
+  AbsentSecret:
+    Type: AWS::SSM::Parameter::Value<List<String>>
+    Default: /app/absent
+  PlainPath:
+    Type: String
+    Default: /app/secret
+Resources:
+  Target:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handler.run
+      Environment:
+        Variables:
+          SECRET_ID: !Ref SecretId
+          ABSENT: !Ref AbsentSecret
+          PLAIN_PATH: !Ref PlainPath
+          SUB: !Sub "\${SecretId}"
+`,
+  });
+  const loaded = await loadSamConfig(directory, options);
+  const environment = loaded.functions[0].environment;
+  assert.equal(environment.SECRET_ID, "from-ssm-env");
+  assert.equal(environment.SUB, "from-ssm-env");
+  assert.equal(environment.ABSENT, "mock-absent");
+  assert.equal(environment.PLAIN_PATH, "/app/secret");
+});
+
+test("SAM fetches SSM value parameters from Parameter Store", async t => {
+  const requestedNames = [];
+  t.mock.method(SSMClient.prototype, "send", async command => {
+    for (const name of command.input.Names) requestedNames.push(name);
+    return { Parameters: command.input.Names.map(name => ({ Name: name, Value: `value${name}` })) };
+  });
+  const directory = await fixture(t, {
+    "template.yaml": `Description: demo
+Parameters:
+  SecretId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /app/secret
+Resources:
+  Target:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handler.run
+      Environment:
+        Variables:
+          SECRET_ID: !Ref SecretId
+`,
+  });
+  const loaded = await loadSamConfig(directory, { ...options, resolveSSM: true });
+  assert.deepEqual(requestedNames, ["/app/secret"]);
+  assert.equal(loaded.functions[0].environment.SECRET_ID, "value/app/secret");
+});
+
+test("SAM honors --param overrides and reports missing SSM value parameters", async t => {
+  let awsCalls = 0;
+  let invalidParameters = [];
+  t.mock.method(SSMClient.prototype, "send", async () => {
+    awsCalls++;
+    return { Parameters: [], InvalidParameters: invalidParameters };
+  });
+  const directory = await fixture(t, {
+    "template.yaml": `Description: demo
+Parameters:
+  SecretId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /app/secret
+Resources:
+  Target:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handler.run
+      Environment:
+        Variables:
+          SECRET_ID: !Ref SecretId
+`,
+  });
+  const overridden = await loadSamConfig(directory, {
+    ...options,
+    resolveSSM: true,
+    params: { SecretId: "literal-value" },
+  });
+  assert.equal(awsCalls, 0);
+  assert.equal(overridden.functions[0].environment.SECRET_ID, "literal-value");
+  invalidParameters = ["/app/secret"];
+  await assert.rejects(
+    loadSamConfig(directory, { ...options, resolveSSM: true }),
+    /SSM parameters not found/,
+  );
+});
+
+test("local resolution mode makes no AWS SSM calls", async t => {
+  let awsCalls = 0;
+  t.mock.method(SSMClient.prototype, "send", async () => {
+    awsCalls++;
+    throw new Error("unexpected SSM call");
+  });
+  const directory = await fixture(t, {
+    "serverless.yml": `service: demo
+provider:
+  environment:
+    VALUE: !Sub "arn:aws:sqs:\${AWS::Region}:\${AWS::AccountId}:queue"
+functions:
+  target:
+    handler: handler.run
+`,
+    "template.yaml": `Description: demo
+Resources:
+  Target:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handler.run
+`,
+  });
+  const localOptions = { stage: "local", region: "eu-west-1", params: {}, resolveSSM: false };
+  await loadServerlessConfig(directory, localOptions);
+  await loadSamConfig(directory, localOptions);
+  assert.equal(awsCalls, 0);
+});

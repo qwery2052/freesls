@@ -3,11 +3,18 @@ import path from "node:path";
 import {
   type ServerlessConfig,
   type RouteDefinition,
+  type FunctionDefinition,
   type LoadResult,
   DEFAULT_OFFLINE_ENV,
 } from "./types.js";
 import { parseYaml, resolveSSMValues, type ParserOptions } from "./parser.js";
-import { extractSSMPaths, resolveScalarData } from "./resolver.js";
+import {
+  extractSSMPaths,
+  resolveScalarData,
+  awsPartition,
+  localRoleName,
+  localFunctionName,
+} from "./resolver.js";
 
 export interface SamParameterDefinition {
   Type?: string;
@@ -27,6 +34,7 @@ export interface SamEventDefinition {
 
 export interface SamFunctionProperties {
   Handler?: string;
+  FunctionName?: string;
   Runtime?: string;
   CodeUri?: string;
   Description?: string;
@@ -39,6 +47,10 @@ export interface SamFunctionProperties {
 export interface SamResource {
   Type?: string;
   Properties?: Record<string, any>;
+  Metadata?: {
+    BuildMethod?: string;
+    BuildProperties?: { EntryPoints?: unknown };
+  };
 }
 
 export interface SamTemplate {
@@ -48,6 +60,7 @@ export interface SamTemplate {
   Globals?: {
     Function?: {
       Runtime?: string;
+      CodeUri?: string;
       Timeout?: number;
       Environment?: {
         Variables?: Record<string, unknown>;
@@ -111,6 +124,8 @@ export interface SamResolutionOptions {
   parameters: Record<string, string>;
   resources?: Record<string, SamResource>;
   ssmValues?: Map<string, string>;
+  references?: Map<string, string>;
+  strictReferences?: boolean;
 }
 
 type SamResolutionContext = SamResolutionOptions & { propertyStack?: unknown[] };
@@ -131,6 +146,16 @@ function resolveSsmParameterValue(ssmPath: string, ssmValues?: Map<string, strin
 
   const parameterLeafName = normalizedSsmKey.split("/").pop() || "value";
   return `mock-${parameterLeafName.toLowerCase()}`;
+}
+
+/**
+ * CloudFormation resolves AWS::SSM::Parameter::Value<...> defaults against Parameter Store.
+ * AWS::SSM::Parameter::Name and plain String parameters keep their literal value.
+ */
+function isSsmValueParameterType(parameterType?: string): boolean {
+  return (
+    typeof parameterType === "string" && parameterType.startsWith("AWS::SSM::Parameter::Value<")
+  );
 }
 
 /**
@@ -163,13 +188,26 @@ function resolveCloudFormationRef(
   options: SamResolutionContext,
 ): string | null {
   const trimmedRef = referenceName.trim();
+  if (options.references?.has(trimmedRef)) return options.references.get(trimmedRef)!;
+  const resource = options.resources?.[trimmedRef];
+  if (
+    resource?.Type === "AWS::Serverless::Function" ||
+    resource?.Type === "AWS::Lambda::Function"
+  ) {
+    return resolveTemplatePropertyString(
+      resource.Properties?.FunctionName,
+      localFunctionName(options.serviceName, trimmedRef),
+      options,
+    );
+  }
 
   // CloudFormation pseudo parameters.
   if (trimmedRef === "AWS::Region") return options.region;
   if (trimmedRef === "AWS::AccountId") return "123456789012";
   if (trimmedRef === "AWS::StackName") return options.serviceName;
-  if (trimmedRef === "AWS::Partition") return "aws";
-  if (trimmedRef === "AWS::URLSuffix") return "amazonaws.com";
+  if (trimmedRef === "AWS::Partition") return awsPartition(options.region);
+  if (trimmedRef === "AWS::URLSuffix")
+    return options.region.startsWith("cn-") ? "amazonaws.com.cn" : "amazonaws.com";
   if (trimmedRef === "AWS::NoValue") return "";
 
   // Template and CLI parameters.
@@ -189,6 +227,12 @@ function resolveCloudFormationRef(
     const resourceProperties = targetResource.Properties || {};
 
     switch (resourceType) {
+      case "AWS::IAM::Role":
+        return resolveTemplatePropertyString(
+          resourceProperties.RoleName,
+          localRoleName(options.serviceName, trimmedRef),
+          options,
+        );
       case "AWS::SQS::Queue": {
         const queueName = resolveTemplatePropertyString(
           resourceProperties.QueueName,
@@ -227,6 +271,7 @@ function resolveCloudFormationRef(
         return `mock-${trimmedRef.toLowerCase()}`;
       }
       default: {
+        if (options.strictReferences) return null;
         if (resourceProperties.Name != null) {
           return resolveTemplatePropertyString(resourceProperties.Name, trimmedRef, options);
         }
@@ -246,6 +291,8 @@ function resolveCloudFormationGetAtt(
   attributeName: string,
   options: SamResolutionContext,
 ): string | null {
+  if (options.references?.has(`${resourceName}.${attributeName}`))
+    return options.references.get(`${resourceName}.${attributeName}`)!;
   const targetResource = options.resources?.[resourceName];
   if (!targetResource) {
     return null;
@@ -253,6 +300,13 @@ function resolveCloudFormationGetAtt(
 
   const resourceType = targetResource.Type || "";
   const resourceProperties = targetResource.Properties || {};
+
+  if (
+    attributeName === "Arn" &&
+    ["AWS::Serverless::Function", "AWS::Lambda::Function"].includes(resourceType)
+  ) {
+    return `arn:${awsPartition(options.region)}:lambda:${options.region}:${options.references?.get("AWS::AccountId") || "123456789012"}:function:${resolveCloudFormationRef(resourceName, options)}`;
+  }
 
   if (attributeName === "Arn") {
     switch (resourceType) {
@@ -275,10 +329,11 @@ function resolveCloudFormationGetAtt(
       case "AWS::IAM::Role": {
         const roleName = resolveTemplatePropertyString(
           resourceProperties.RoleName,
-          `${options.serviceName}-${resourceName}`,
+          localRoleName(options.serviceName, resourceName),
           options,
         );
-        return `arn:aws:iam::123456789012:role/${roleName}`;
+        const rolePath = resolveTemplatePropertyString(resourceProperties.Path, "/", options);
+        return `arn:${awsPartition(options.region)}:iam::123456789012:role${rolePath}${roleName}`;
       }
       case "AWS::IAM::ManagedPolicy": {
         const policyName = resolveTemplatePropertyString(
@@ -289,6 +344,7 @@ function resolveCloudFormationGetAtt(
         return `arn:aws:iam::123456789012:policy/${policyName}`;
       }
       default:
+        if (options.strictReferences) return null;
         return `arn:aws:custom:${options.region}:123456789012:${resourceName.toLowerCase()}`;
     }
   }
@@ -297,7 +353,7 @@ function resolveCloudFormationGetAtt(
     return resolveCloudFormationRef(resourceName, options);
   }
 
-  return `${resourceName}.${attributeName}`;
+  return options.strictReferences ? null : `${resourceName}.${attributeName}`;
 }
 
 /**
@@ -459,7 +515,7 @@ function resolveSamEnvironmentMap(
     const resolved = rawValue;
     if (resolved !== null && typeof resolved === "object") {
       throw new Error(
-        `Unsupported or unresolved intrinsic/object in environment variable ${variableKey}`,
+        `Unsupported or unresolved intrinsic/object in environment variable ${variableKey}. Declare a supported local resource or provide --cf-value LogicalId.Attribute=value (stack outputs: Outputs.OutputKey).`,
       );
     }
     resolvedEnvironment[variableKey] = String(resolved ?? "");
@@ -469,17 +525,13 @@ function resolveSamEnvironmentMap(
 }
 
 /**
- * Normalize HTTP routes for a SAM function.
+ * Resolve the source handler relative to the effective SAM code directory.
  */
-function extractSamFunctionRoutes(
+function resolveSamHandler(
   functionName: string,
   functionProperties: SamFunctionProperties,
-  resolvedEnvironment: Record<string, string>,
-): RouteDefinition[] {
-  const routes: RouteDefinition[] = [];
-  const rawEvents = functionProperties.Events;
-  if (!rawEvents) return routes;
-
+  metadata?: SamResource["Metadata"],
+): string {
   for (const field of ["Handler", "CodeUri"] as const) {
     if (functionProperties[field] !== undefined && typeof functionProperties[field] !== "string") {
       throw new Error(`Invalid ${field} for function ${functionName}; expected a string`);
@@ -492,17 +544,61 @@ function extractSamFunctionRoutes(
   const rawHandler = functionProperties.Handler || "index.handler";
   const codeUri = functionProperties.CodeUri?.trim();
 
-  // Include the function's code directory.
   let fullHandler = rawHandler;
+  const entryPoints =
+    metadata?.BuildMethod === "esbuild" ? metadata.BuildProperties?.EntryPoints : undefined;
+  if (entryPoints !== undefined) {
+    if (
+      !Array.isArray(entryPoints) ||
+      entryPoints.length === 0 ||
+      !entryPoints.every((entry): entry is string => typeof entry === "string" && !!entry.trim())
+    ) {
+      throw new Error(
+        `Invalid esbuild EntryPoints for function ${functionName}; expected a non-empty array of file paths`,
+      );
+    }
+    const dot = rawHandler.lastIndexOf(".");
+    if (dot <= 0 || dot === rawHandler.length - 1) {
+      throw new Error(`Invalid Handler for function ${functionName}; expected file.function`);
+    }
+    const moduleName = path.posix.basename(rawHandler.slice(0, dot).replace(/\\/g, "/"));
+    const candidates = entryPoints.map(entry => entry.trim().replace(/\\/g, "/"));
+    const matches =
+      candidates.length === 1
+        ? candidates
+        : candidates.filter(
+            entry => path.posix.basename(entry, path.posix.extname(entry)) === moduleName,
+          );
+    if (matches.length !== 1) {
+      throw new Error(
+        `Cannot select esbuild EntryPoints for function ${functionName}; use one entry point or a unique file matching the Handler module`,
+      );
+    }
+    fullHandler = `${matches[0]}.${rawHandler.slice(dot + 1)}`;
+  }
+
+  // Entry points are relative to the function's effective code directory.
   if (codeUri && codeUri !== "." && codeUri !== "./") {
     // Normalize path separators.
     const normalizedUri = codeUri.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "");
-    fullHandler = `${normalizedUri}/${rawHandler}`;
+    fullHandler = `${normalizedUri}/${fullHandler}`;
   }
+  return fullHandler;
+}
+
+/** Normalize HTTP routes using the same handler as direct Lambda invocations. */
+function extractSamFunctionRoutes(
+  functionName: string,
+  functionProperties: SamFunctionProperties,
+  resolvedEnvironment: Record<string, string>,
+  fullHandler: string,
+): RouteDefinition[] {
+  const routes: RouteDefinition[] = [];
+  const rawEvents = functionProperties.Events;
 
   const eventEntries: SamEventDefinition[] = Array.isArray(rawEvents)
     ? rawEvents
-    : Object.values(rawEvents);
+    : Object.values(rawEvents || {});
 
   for (const event of eventEntries) {
     const eventType = event?.Type;
@@ -562,12 +658,30 @@ export async function loadSamConfig(
 
   const parameters = buildSamParameters(initialConfig.Parameters, options.params, options.stage);
 
+  // SSM value parameters resolve their default path to the stored value, like ${ssm:...}.
+  // CLI --param overrides are literal values and take precedence.
+  const ssmValueParameters: Array<{ name: string; path: string }> = [];
+  for (const [parameterName, parameterDefinition] of Object.entries(
+    initialConfig.Parameters || {},
+  )) {
+    if (!isSsmValueParameterType(parameterDefinition.Type)) continue;
+    if (options.params[parameterName] !== undefined) continue;
+    const defaultPath =
+      typeof parameterDefinition.Default === "string" ? parameterDefinition.Default.trim() : "";
+    if (defaultPath) ssmValueParameters.push({ name: parameterName, path: defaultPath });
+  }
+
   const templateResources = initialConfig.Resources || {};
+
+  const references = new Map<string, string>();
+  for (const [key, value] of Object.entries(options.cfValues || {})) references.set(key, value);
 
   const samOptions = {
     region: options.region,
     serviceName,
     resources: templateResources,
+    references,
+    strictReferences: Boolean(options.scheduler || options.cfValues),
   };
 
   // Discover SSM paths from parsed data, including explicit substitutions.
@@ -577,12 +691,17 @@ export async function loadSamConfig(
     ssmParameterPaths.push(...extractSSMPaths(text));
     return text;
   });
+  ssmParameterPaths.push(...ssmValueParameters.map(entry => entry.path));
   const ssmValues = await resolveSSMValues(
     ssmParameterPaths,
     options.region,
     options.resolveSSM,
     workingDirectory,
   );
+
+  for (const { name, path: parameterPath } of ssmValueParameters) {
+    parameters[name] = resolveSsmParameterValue(parameterPath, ssmValues);
+  }
 
   const fullSamOptions = {
     ...samOptions,
@@ -605,6 +724,8 @@ export async function loadSamConfig(
 
   // Extract function routes.
   const routeDefinitions: RouteDefinition[] = [];
+  const functions: FunctionDefinition[] = [];
+  const arns = new Set<string>();
   const resources = finalConfig.Resources || {};
 
   for (const [resourceName, resourceConfig] of Object.entries(resources)) {
@@ -613,13 +734,37 @@ export async function loadSamConfig(
       continue;
     }
 
-    const properties = resourceConfig.Properties || {};
+    const properties: SamFunctionProperties = {
+      ...(resourceType === "AWS::Serverless::Function"
+        ? { CodeUri: finalConfig.Globals?.Function?.CodeUri }
+        : {}),
+      ...resourceConfig.Properties,
+    };
     const functionEnv = resolveSamEnvironmentMap(
       properties.Environment?.Variables,
       globalEnvironment,
     );
 
-    const functionRoutes = extractSamFunctionRoutes(resourceName, properties, functionEnv);
+    const handler = resolveSamHandler(resourceName, properties, resourceConfig.Metadata);
+    const functionRoutes = extractSamFunctionRoutes(resourceName, properties, functionEnv, handler);
+    const name = resolveCloudFormationRef(resourceName, { ...fullSamOptions, parameters });
+    if (typeof name !== "string" || !/^[\w-]{1,64}$/.test(name))
+      throw new Error(
+        `Invalid FunctionName for ${resourceName}; use 1-64 letters, digits, underscores or hyphens.`,
+      );
+    const arn = resolveCloudFormationGetAtt(resourceName, "Arn", {
+      ...fullSamOptions,
+      parameters,
+    })!;
+    if (arns.has(arn)) throw new Error(`Duplicate FunctionName for ${resourceName}.`);
+    arns.add(arn);
+    functions.push({
+      functionName: resourceName,
+      arn,
+      handler,
+      environment: functionEnv,
+    });
+    for (const route of functionRoutes) route.arn = arn;
     routeDefinitions.push(...functionRoutes);
   }
 
@@ -636,6 +781,7 @@ export async function loadSamConfig(
   return {
     config: serverlessLikeConfig,
     routes: routeDefinitions,
+    functions,
     globalEnv: globalEnvironment,
     framework: "sam",
   };

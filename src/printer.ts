@@ -1,5 +1,8 @@
 import pc from "picocolors";
 import type { RouteDefinition } from "./types.js";
+import type { SchedulerEvent } from "./scheduler.js";
+
+const CAT_EMOJIS = ["🐱", "😺", "😸", "😻", "😼", "🙀", "🐈", "🐾"] as const;
 
 const METHOD_BADGE_FORMATTERS: Record<string, (methodText: string) => string> = {
   GET: methodText => pc.bold(pc.bgGreen(pc.black(methodText))),
@@ -18,6 +21,44 @@ export function formatMethod(httpMethod: string): string {
   return formatBadge(` ${normalizedMethod} `);
 }
 
+export const CAT_COLOR_NAMES = [
+  "red",
+  "green",
+  "yellow",
+  "blue",
+  "magenta",
+  "cyan",
+  "white",
+  "gray",
+  "redBright",
+  "greenBright",
+  "yellowBright",
+  "blueBright",
+  "magentaBright",
+  "cyanBright",
+  "whiteBright",
+] as const;
+
+export type CatColor = (typeof CAT_COLOR_NAMES)[number];
+
+/** Low-probability easter egg: every cat line gets its own color. */
+export const SHINY_CHANCE = 1 / 200;
+
+export function selectCatColors(
+  random: () => number = Math.random,
+  shinyChance: number = SHINY_CHANCE,
+): { shiny: boolean; colors: [CatColor, CatColor, CatColor] } {
+  const indexBelow = (bound: number) => Math.min(bound - 1, Math.floor(random() * bound));
+  const shiny = random() < shinyChance;
+  if (!shiny) {
+    const color = CAT_COLOR_NAMES[indexBelow(CAT_COLOR_NAMES.length)];
+    return { shiny, colors: [color, color, color] };
+  }
+  const pool = [...CAT_COLOR_NAMES];
+  const colors = Array.from({ length: 3 }, () => pool.splice(indexBelow(pool.length), 1)[0]);
+  return { shiny, colors: colors as [CatColor, CatColor, CatColor] };
+}
+
 export function printBanner(
   serviceName: string,
   port: number,
@@ -32,10 +73,13 @@ export function printBanner(
       : pc.bold(pc.bgMagenta(pc.white(" SLS ")));
   const debugBadge = debug ? `  ${pc.bold(pc.bgGreen(pc.black(" DEBUG ")))}` : "";
 
+  const { shiny, colors } = selectCatColors();
+  const shinyBadge = shiny ? `  ${pc.bold(pc.bgYellow(pc.black(" ✨ SHINY ")))}` : "";
+
   const bannerArt = `
-   ${pc.magenta("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.3.7")}  ${frameworkBadge}${debugBadge}
-   ${pc.magenta("( o.o )")}  ${pc.dim("Offline API Gateway & Lambda Runner")}
-    ${pc.magenta("> ^ <")}   ${pc.green("●")} Service: ${pc.bold(serviceName)} ${pc.dim(`[stage: ${stage}]`)}
+   ${pc[colors[0]]("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.4.0")}  ${frameworkBadge}${debugBadge}${shinyBadge}
+  ${pc[colors[1]]("( o.o )")}  ${pc.dim("Offline API Gateway & Lambda Runner")}
+   ${pc[colors[2]]("> ^ <")}   ${pc.green("●")} Service: ${pc.bold(serviceName)} ${pc.dim(`[stage: ${stage}]`)}
   `;
 
   console.log(bannerArt);
@@ -152,11 +196,124 @@ export function printRoutes(routes: RouteDefinition[], port: number, basePath = 
       pc.dim(`└─ handler: `) + pc.yellow(route.handler) + pc.dim(` (${route.functionName})`);
 
     console.log(`  ${methodBadge}  ${endpointUrl}`);
-    console.log(`     ${handlerDetail}\n`);
+    console.log(`     ${handlerDetail}`);
+    if (route.arn) console.log(`     ${pc.dim("└─ arn: ")}${pc.cyan(route.arn)}`);
+    console.log();
   }
 
   console.log(pc.dim("─".repeat(60)));
   console.log(pc.italic(pc.dim("  Ready for requests... (Ctrl+C to exit)\n")));
+}
+
+function randomCatFace(): string {
+  return CAT_EMOJIS[Math.floor(Math.random() * CAT_EMOJIS.length)];
+}
+
+function formatDuration(milliseconds: number): string {
+  if (!Number.isFinite(milliseconds)) return "unknown";
+  const totalSeconds = Math.max(0, Math.round(milliseconds / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+}
+
+/**
+ * Print Scheduler lifecycle events. Never includes Target.Input or credentials.
+ */
+export function printSchedulerEvent(
+  event: SchedulerEvent,
+  resolveTarget?: (arn: string) => string,
+) {
+  const face = pc.magenta(randomCatFace());
+  const targetName = resolveTarget ? resolveTarget(event.target) : event.target;
+
+  switch (event.type) {
+    case "received": {
+      const dueText = event.due
+        ? `${new Date(event.due).toISOString()} (${event.timezone ?? "UTC"})`
+        : "unknown";
+      const relative = event.due ? pc.dim(` · in ${formatDuration(event.due - Date.now())}`) : "";
+      console.log(
+        `\n${face} ${pc.bold(pc.cyan("[Scheduler]"))} Schedule received ${pc.bold(event.name)}`,
+      );
+      console.log(`   ${pc.dim("├─ target:")} ${pc.yellow(targetName)}`);
+      console.log(`   ${pc.dim("│  arn:")}    ${pc.dim(event.target)}`);
+      console.log(`   ${pc.dim("├─ fires: ")} ${pc.white(dueText)}${relative}`);
+      console.log(
+        `   ${pc.dim("└─ actions:")} ${pc.white(event.state ?? "ENABLED")} ${pc.dim("· after run")} ${pc.white(event.action ?? "NONE")} ${pc.dim("· retries")} ${pc.white(String(event.retries ?? 0))} ${pc.dim("· max age")} ${pc.white(`${event.maxAgeSeconds ?? 0}s`)}`,
+      );
+      break;
+    }
+    case "updated": {
+      const dueText = event.due
+        ? `${new Date(event.due).toISOString()} (${event.timezone ?? "UTC"})`
+        : "unknown";
+      console.log(
+        `\n${face} ${pc.bold(pc.cyan("[Scheduler]"))} Schedule updated ${pc.bold(event.name)} ${pc.dim("→")} ${pc.yellow(targetName)}`,
+      );
+      console.log(`   ${pc.dim("└─ fires: ")} ${pc.white(dueText)}`);
+      break;
+    }
+    case "firing":
+      console.log(
+        `${face} ${pc.bold(pc.cyan("[Scheduler]"))} Firing ${pc.bold(event.name)} ${pc.dim("→")} ${pc.yellow(targetName)}`,
+      );
+      break;
+    case "delivered":
+      console.log(
+        `${face} ${pc.bold(pc.green("[Scheduler]"))} Delivered ${pc.bold(event.name)} ${pc.dim("· schedule processed")}`,
+      );
+      break;
+    case "cancelled":
+      console.log(
+        `${face} ${pc.bold(pc.yellow("[Scheduler]"))} Schedule cancelled ${pc.bold(event.name)}`,
+      );
+      break;
+    case "expired":
+      console.log(
+        `${face} ${pc.bold(pc.red("[Scheduler]"))} Delivery expired ${pc.bold(event.name)}`,
+      );
+      break;
+    case "failed":
+      console.log(
+        `${face} ${pc.bold(pc.red("[Scheduler]"))} Delivery failed (retries exhausted) ${pc.bold(event.name)}`,
+      );
+      break;
+  }
+}
+
+function statusColor(statusCode: number) {
+  const statusText = `${statusCode}`;
+  return statusCode >= 500
+    ? pc.red(statusText)
+    : statusCode >= 400
+      ? pc.yellow(statusText)
+      : pc.green(statusText);
+}
+
+/**
+ * Print a Lambda invocation start (HTTP route or Scheduler-triggered).
+ */
+export function printLambdaStart(functionName: string) {
+  const face = pc.magenta(randomCatFace());
+  console.log(
+    `\n${face} ${pc.bold(pc.cyan("[Lambda]"))}${pc.bold(pc.green("[start]"))} ${pc.bold(functionName)}`,
+  );
+}
+
+/**
+ * Print a Lambda invocation end (HTTP response summary), including errors.
+ */
+export function printLambdaEnd(
+  method: string,
+  path: string,
+  statusCode: number,
+  durationMs: number,
+) {
+  const face = pc.magenta(randomCatFace());
+  console.log(
+    `\n${face} ${pc.bold(pc.cyan("[Lambda]"))}${pc.bold(pc.magenta("[end]"))} ${formatMethod(method)} ${pc.white(path)} ${statusColor(statusCode)} ${pc.dim(`(${durationMs}ms)`)}`,
+  );
 }
 
 export function printSsmResolutionError(
