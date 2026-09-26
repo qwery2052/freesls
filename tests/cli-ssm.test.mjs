@@ -15,12 +15,13 @@ test("CLI rejects invalid parameters and ports without printing parameter values
   for (const args of [
     ["--param", "private-invalid-value"],
     ["--cf-value", "private-invalid-value"],
+    ["--env", "private-invalid-value"],
     ["--port", "4000oops"],
     ["--port", "65536"],
   ]) {
     const result = spawnSync(process.execPath, [cliPath, ...args], { encoding: "utf8" });
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /Invalid --(?:param|port|cf-value)/);
+    assert.match(result.stderr, /Invalid --(?:param|port|cf-value|env)/);
     assert.doesNotMatch(result.stderr, /private-invalid-value/);
   }
 });

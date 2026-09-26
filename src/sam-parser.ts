@@ -719,6 +719,7 @@ export async function loadSamConfig(
   const globalEnvironment = {
     ...DEFAULT_OFFLINE_ENV,
     ...resolveSamEnvironmentMap(globalSamEnv),
+    ...options.envOverrides,
   };
   Object.assign(process.env, globalEnvironment);
 
@@ -744,6 +745,8 @@ export async function loadSamConfig(
       properties.Environment?.Variables,
       globalEnvironment,
     );
+    // Explicit CLI environment overrides win over global and function environments.
+    Object.assign(functionEnv, options.envOverrides);
 
     const handler = resolveSamHandler(resourceName, properties, resourceConfig.Metadata);
     const functionRoutes = extractSamFunctionRoutes(resourceName, properties, functionEnv, handler);

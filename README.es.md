@@ -14,10 +14,11 @@
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg?style=flat-square" alt="Node Version" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.x-blue.svg?style=flat-square" alt="TypeScript" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="License" /></a>
+  <a href="https://buymeacoffee.com/myth.dev"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00.svg?style=flat-square&logo=buymeacoffee&logoColor=black" alt="Buy Me a Coffee" /></a>
 </p>
 
 ```
-   /\_/\   FreeSLS v0.4.0  [SLS] / [AWS SAM]
+   /\_/\   FreeSLS v0.5.0-beta.0  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
    > ^ <   ● Service: example-service [stage: dev]
 ────────────────────────────────────────────────────────────
@@ -112,22 +113,23 @@ O agregar un script a tu `package.json`:
 
 ### Opciones de CLI
 
-| Opción                                       | Alias            | Descripción                                                                     | Valor por Defecto                |
-| -------------------------------------------- | ---------------- | ------------------------------------------------------------------------------- | -------------------------------- |
+| Opción                                       | Alias            | Descripción                                                                            | Valor por Defecto                |
+| -------------------------------------------- | ---------------- | -------------------------------------------------------------------------------------- | -------------------------------- |
 | [`--sam`](#--sam)                            | `-sam`           | ⚠️ **Usar con precaución:** Usa template de AWS SAM (`template.yaml` / `template.yml`) | `false`                          |
-| [`--sls`](#--sls)                            | `-sls`           | Usa template de Serverless Framework (`serverless.yml`)                         | `true` (por defecto)             |
-| [`--stage`](#--stage)                        | `-s`             | Stage de despliegue (`dev`, `staging`, `prod`)                                  | `develop`                        |
-| [`--region`](#--region)                      | `-r`             | Región de AWS para SSM y contexto Lambda                                        | `us-east-1`                      |
-| [`--port`](#--port)                          | `-p`             | Puerto HTTP para el servidor local                                              | `4000`                           |
-| [`--base-path`](#--base-path)                | `-b`, `--prefix` | Prefijo de ruta base para todos los endpoints (ej. `/example-base-path`)        | `""` (raíz `/`)                  |
-| [`--profile`](#--profile)                    |                  | Perfil de AWS CLI / AWS SSO                                                     | Variables de entorno del sistema |
-| [`--param`](#--param)                        |                  | Parámetros clave=valor (se inyectan a `process.env`)                            | `{}`                             |
-| [`--no-ssm`](#--no-ssm)                      |                  | Desactiva consultas a AWS SSM (usa `ssm.env`, fallbacks o mocks)                | `false` (resuelve SSM real)      |
-| [`--scheduler`](#--scheduler)                |                  | Activa el endpoint Scheduler local para Lambdas y ejecuciones únicas            | `false`                          |
-| [`--cf-value <clave=valor...>`](#--cf-value) |                  | Sobrescribe una referencia (por ejemplo `ExampleRole.Arn=arn:...`)              | Ninguno                          |
-| [`--show-env`](#--show-env)                  |                  | Muestra los valores de variables sin enmascarar en consola                      | `false` (enmascara secretos)     |
-| [`--debug`](#--debug)                        | `-d`             | Activa logs detallados del ciclo de vida con tiempos por etapa                  | `false`                          |
-| [`--version`](#--version)                    | `-v`, `-V`       | Muestra la versión actual instalada                                             |                                  |
+| [`--sls`](#--sls)                            | `-sls`           | Usa template de Serverless Framework (`serverless.yml`)                                | `true` (por defecto)             |
+| [`--stage`](#--stage)                        | `-s`             | Stage de despliegue (`dev`, `staging`, `prod`)                                         | `develop`                        |
+| [`--region`](#--region)                      | `-r`             | Región de AWS para SSM y contexto Lambda                                               | `us-east-1`                      |
+| [`--port`](#--port)                          | `-p`             | Puerto HTTP para el servidor local                                                     | `4000`                           |
+| [`--base-path`](#--base-path)                | `-b`, `--prefix` | Prefijo de ruta base para todos los endpoints (ej. `/example-base-path`)               | `""` (raíz `/`)                  |
+| [`--profile`](#--profile)                    |                  | Perfil de AWS CLI / AWS SSO                                                            | Variables de entorno del sistema |
+| [`--param`](#--param)                        |                  | Parámetros clave=valor (se inyectan a `process.env`)                                   | `{}`                             |
+| [`--env <clave=valor...>`](#--env)           | `-e`             | Sobrescribe variables de entorno (gana sobre template, SSM y `--param`)                | Ninguno                          |
+| [`--no-ssm`](#--no-ssm)                      |                  | Desactiva consultas a AWS SSM (usa `ssm.env`, fallbacks o mocks)                       | `false` (resuelve SSM real)      |
+| [`--scheduler`](#--scheduler)                |                  | Activa el endpoint Scheduler local para Lambdas y ejecuciones únicas                   | `false`                          |
+| [`--cf-value <clave=valor...>`](#--cf-value) |                  | Sobrescribe una referencia (por ejemplo `ExampleRole.Arn=arn:...`)                     | Ninguno                          |
+| [`--show-env`](#--show-env)                  |                  | Muestra los valores de variables sin enmascarar en consola                             | `false` (enmascara secretos)     |
+| [`--debug`](#--debug)                        | `-d`             | Activa logs detallados del ciclo de vida con tiempos por etapa                         | `false`                          |
+| [`--version`](#--version)                    | `-v`, `-V`       | Muestra la versión actual instalada                                                    |                                  |
 
 > [!WARNING]
 > **Usa el modo AWS SAM (`--sam`) con precaución**
@@ -205,6 +207,16 @@ Inyecta pares `clave=valor` en `process.env` y los expone como `${param:clave}`.
 freesls --param deploymentStage=develop --param empty=
 ```
 
+#### `--env`
+
+Alias `-e`. Sobrescribe las variables de entorno finales como `clave=valor`. Repetible. Los valores se aplican después del template, la resolución de SSM, los fallbacks, los mocks y `--param`, por lo que siempre ganan. Úsalo para reapuntar un valor cargado desde SSM (por ejemplo el ARN de una tabla de producción) hacia un recurso de pruebas sin cambiar AWS.
+
+```bash
+freesls -s dev --profile mi-empresa-dev \
+  -e USERS_TABLE=arn:aws:dynamodb:us-east-1:111122223333:table/users-test \
+  -e USER_COOKIES_TABLE_NAME=user-cookies-test
+```
+
 #### `--no-ssm`
 
 Desactiva las consultas a AWS SSM y resuelve `${ssm:/...}` desde `ssm.env`, fallbacks en YAML o mocks offline. Ver Modo Offline más abajo.
@@ -215,7 +227,7 @@ freesls --no-ssm
 
 #### `--scheduler`
 
-Activa el endpoint local de EventBridge Scheduler (una sola vez) e inyecta `AWS_ENDPOINT_URL_SCHEDULER`. Ver Scheduler local más abajo.
+Activa el endpoint local de EventBridge Scheduler (una sola vez) e inyecta `AWS_ENDPOINT_URL_SCHEDULER`. Ver Scheduler local más abajo. Este flag también imprime el ARN simulado de cada función bajo su endpoint.
 
 ```bash
 freesls --scheduler --no-ssm
@@ -280,6 +292,9 @@ freesls --scheduler --no-ssm --cf-value ExampleRole.Arn=arn:aws:iam::12345678901
 # Inyectar parámetros personalizados a process.env y ${param:...}
 freesls -s dev --param domain=api.local --param deploymentStage=dev
 
+# Sobrescribir variables de entorno (gana sobre template, SSM y --param)
+freesls -s dev --env USERS_TABLE=arn:aws:dynamodb:us-east-1:111122223333:table/users-test
+
 # Ver valores de variables de entorno completas en la terminal sin enmascarar
 freesls -s dev --show-env
 
@@ -304,7 +319,7 @@ freesls -s dev --debug
 5. A la hora indicada invoca la Lambda **local** con el `Input` (JSON). Nada sale a AWS.
 6. `GetSchedule`/`DeleteSchedule` leen o eliminan el schedule en memoria.
 
-> El ARN exacto aparece bajo cada endpoint como `└─ arn: ...`. Copia ese valor para `Target.Arn`.
+> Con `--scheduler`, el ARN exacto aparece bajo cada endpoint como `└─ arn: ...`. Copia ese valor para `Target.Arn`.
 
 ### Ejemplo de principio a fin
 

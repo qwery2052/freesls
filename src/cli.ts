@@ -41,7 +41,7 @@ function parseCliParameters(parameterEntries?: string[], flag = "--param"): Reco
 program
   .name("freesls")
   .description("Offline API Gateway & Lambda Runner (Serverless Framework & AWS SAM)")
-  .version("0.4.0", "-v, --version", "Output the current version number")
+  .version("0.5.0-beta.0", "-v, --version", "Output the current version number")
   .option("-s, --stage <stage>", "Deployment stage", "develop")
   .option("-r, --region <region>", "AWS region", "us-east-1")
   .option("-p, --port <port>", "Local HTTP server port", "4000")
@@ -52,6 +52,7 @@ program
   .option("--prefix <prefix>", "Alias for --base-path")
   .option("--profile <profile>", "AWS CLI/SSO credential profile")
   .option("--param <params...>", "Parameters as key=value (e.g. deploymentStage=develop)")
+  .option("-e, --env <vars...>", "Override environment variables as key=value (highest precedence)")
   .option("--sam", "Use an AWS SAM template (template.yaml/template.yml)")
   .option("--sls", "Use Serverless Framework (serverless.yml) [default]")
   .option("--no-ssm", "Disable AWS SSM queries and use local fallbacks or mocks")
@@ -118,6 +119,7 @@ program
         cfValues: commandOptions.cfValue
           ? parseCliParameters(commandOptions.cfValue, "--cf-value")
           : undefined,
+        envOverrides: parseCliParameters(commandOptions.env, "--env"),
       };
 
       const {
@@ -139,7 +141,7 @@ program
         Boolean(commandOptions.debug),
       );
       printEnvironmentSummary(globalEnv, Boolean(commandOptions.showEnv));
-      printRoutes(routes, serverPort, basePath);
+      printRoutes(routes, serverPort, basePath, Boolean(commandOptions.scheduler));
 
       if (commandOptions.scheduler) {
         const execute = createLambdaExecutor({

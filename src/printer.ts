@@ -77,7 +77,7 @@ export function printBanner(
   const shinyBadge = shiny ? `  ${pc.bold(pc.bgYellow(pc.black(" ✨ SHINY ")))}` : "";
 
   const bannerArt = `
-   ${pc[colors[0]]("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.4.0")}  ${frameworkBadge}${debugBadge}${shinyBadge}
+   ${pc[colors[0]]("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.5.0-beta.0")}  ${frameworkBadge}${debugBadge}${shinyBadge}
   ${pc[colors[1]]("( o.o )")}  ${pc.dim("Offline API Gateway & Lambda Runner")}
    ${pc[colors[2]]("> ^ <")}   ${pc.green("●")} Service: ${pc.bold(serviceName)} ${pc.dim(`[stage: ${stage}]`)}
   `;
@@ -174,7 +174,12 @@ export function printEnvironmentSummary(
   console.log();
 }
 
-export function printRoutes(routes: RouteDefinition[], port: number, basePath = "") {
+export function printRoutes(
+  routes: RouteDefinition[],
+  port: number,
+  basePath = "",
+  showArn = false,
+) {
   console.log(pc.dim("─".repeat(60)));
   console.log(`\n ${pc.bold("⚡ Registered Endpoints:")}\n`);
 
@@ -197,7 +202,7 @@ export function printRoutes(routes: RouteDefinition[], port: number, basePath = 
 
     console.log(`  ${methodBadge}  ${endpointUrl}`);
     console.log(`     ${handlerDetail}`);
-    if (route.arn) console.log(`     ${pc.dim("└─ arn: ")}${pc.cyan(route.arn)}`);
+    if (showArn && route.arn) console.log(`     ${pc.dim("└─ arn: ")}${pc.cyan(route.arn)}`);
     console.log();
   }
 

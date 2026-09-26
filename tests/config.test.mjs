@@ -900,6 +900,81 @@ Resources:
   );
 });
 
+test("Serverless --env overrides template, SSM and --param values", async t => {
+  const directory = await fixture(t, {
+    "serverless.yml": JSON.stringify({
+      service: "demo",
+      provider: {
+        environment: {
+          GLOBAL: "${ssm:/app/global, 'fallback'}",
+          PARAM_ONLY: "${param:key}",
+        },
+      },
+      functions: {
+        demo: {
+          handler: "index.handler",
+          environment: { LOCAL: "${ssm:/app/local, 'fallback'}" },
+          events: [{ http: "GET /" }],
+        },
+      },
+    }),
+    "ssm.env": "/app/global=from-ssm\n/app/local=from-ssm\n",
+  });
+  const result = await loadServerlessConfig(directory, {
+    ...options,
+    params: { key: "param-value" },
+    envOverrides: {
+      GLOBAL: "override-global",
+      LOCAL: "override-local",
+      PARAM_ONLY: "override-param",
+    },
+  });
+  assert.equal(result.globalEnv.GLOBAL, "override-global");
+  assert.equal(result.routes[0].environment.GLOBAL, "override-global");
+  assert.equal(result.routes[0].environment.LOCAL, "override-local");
+  assert.equal(result.routes[0].environment.PARAM_ONLY, "override-param");
+  assert.equal(result.functions[0].environment.LOCAL, "override-local");
+  assert.equal(process.env.GLOBAL, "override-global");
+});
+
+test("SAM --env overrides global and function SSM-resolved values", async t => {
+  const directory = await fixture(t, {
+    "template.yaml": `Description: demo
+Globals:
+  Function:
+    Environment:
+      Variables:
+        GLOBAL: \${ssm:/app/global, 'fallback'}
+Parameters:
+  SecretId:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /app/secret
+Resources:
+  Target:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handler.run
+      Environment:
+        Variables:
+          SECRET_ID: !Ref SecretId
+          STATIC: plain
+`,
+    "ssm.env": "/app/secret=from-ssm\n/app/global=from-ssm\n",
+  });
+  const loaded = await loadSamConfig(directory, {
+    ...options,
+    envOverrides: {
+      GLOBAL: "override-global",
+      SECRET_ID: "override-secret",
+      STATIC: "override-static",
+    },
+  });
+  assert.equal(loaded.globalEnv.GLOBAL, "override-global");
+  assert.equal(loaded.functions[0].environment.SECRET_ID, "override-secret");
+  assert.equal(loaded.functions[0].environment.STATIC, "override-static");
+  assert.equal(process.env.GLOBAL, "override-global");
+});
+
 test("local resolution mode makes no AWS SSM calls", async t => {
   let awsCalls = 0;
   t.mock.method(SSMClient.prototype, "send", async () => {

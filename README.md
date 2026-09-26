@@ -14,10 +14,11 @@
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg?style=flat-square" alt="Node Version" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.x-blue.svg?style=flat-square" alt="TypeScript" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="License" /></a>
+  <a href="https://buymeacoffee.com/myth.dev"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00.svg?style=flat-square&logo=buymeacoffee&logoColor=black" alt="Buy Me a Coffee" /></a>
 </p>
 
 ```
-   /\_/\   FreeSLS v0.4.0  [SLS] / [AWS SAM]
+   /\_/\   FreeSLS v0.5.0-beta.0  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
    > ^ <   ● Service: example-service [stage: dev]
 ────────────────────────────────────────────────────────────
@@ -112,22 +113,23 @@ Or add a script to your `package.json`:
 
 ### CLI Flags
 
-| Flag                                       | Alias            | Description                                                                   | Default                          |
-| ------------------------------------------ | ---------------- | ----------------------------------------------------------------------------- | -------------------------------- |
+| Flag                                       | Alias            | Description                                                                       | Default                          |
+| ------------------------------------------ | ---------------- | --------------------------------------------------------------------------------- | -------------------------------- |
 | [`--sam`](#--sam)                          | `-sam`           | ⚠️ **Use with caution:** Uses AWS SAM template (`template.yaml` / `template.yml`) | `false`                          |
-| [`--sls`](#--sls)                          | `-sls`           | Uses Serverless Framework template (`serverless.yml`)                         | `true` (default)                 |
-| [`--stage`](#--stage)                      | `-s`             | Target deployment stage (`dev`, `staging`, `prod`)                            | `develop`                        |
-| [`--region`](#--region)                    | `-r`             | AWS region for SSM and Lambda context                                         | `us-east-1`                      |
-| [`--port`](#--port)                        | `-p`             | HTTP port for the local server                                                | `4000`                           |
-| [`--base-path`](#--base-path)              | `-b`, `--prefix` | Base path prefix for all endpoints (e.g. `/example-base-path`)                | `""` (root `/`)                  |
-| [`--profile`](#--profile)                  |                  | AWS CLI / AWS SSO profile name                                                | System environment credentials   |
-| [`--param`](#--param)                      |                  | Custom key=value parameters (injected into `process.env`)                     | `{}`                             |
-| [`--no-ssm`](#--no-ssm)                    |                  | Disables AWS SSM queries (uses `ssm.env`, YAML fallbacks, or mocks)           | `false` (queries real AWS SSM)   |
-| [`--scheduler`](#--scheduler)              |                  | Enable the local one-time Lambda Scheduler endpoint                           | `false`                          |
-| [`--cf-value <key=value...>`](#--cf-value) |                  | Override a reference (for example `ExampleRole.Arn=arn:...`)                  | None                             |
-| [`--show-env`](#--show-env)                |                  | Displays full, unmasked environment variables in console                      | `false` (masks sensitive values) |
-| [`--debug`](#--debug)                      | `-d`             | Enables verbose lifecycle debug logging with stage timings                    | `false`                          |
-| [`--version`](#--version)                  | `-v`, `-V`       | Displays the installed FreeSLS version                                        |                                  |
+| [`--sls`](#--sls)                          | `-sls`           | Uses Serverless Framework template (`serverless.yml`)                             | `true` (default)                 |
+| [`--stage`](#--stage)                      | `-s`             | Target deployment stage (`dev`, `staging`, `prod`)                                | `develop`                        |
+| [`--region`](#--region)                    | `-r`             | AWS region for SSM and Lambda context                                             | `us-east-1`                      |
+| [`--port`](#--port)                        | `-p`             | HTTP port for the local server                                                    | `4000`                           |
+| [`--base-path`](#--base-path)              | `-b`, `--prefix` | Base path prefix for all endpoints (e.g. `/example-base-path`)                    | `""` (root `/`)                  |
+| [`--profile`](#--profile)                  |                  | AWS CLI / AWS SSO profile name                                                    | System environment credentials   |
+| [`--param`](#--param)                      |                  | Custom key=value parameters (injected into `process.env`)                         | `{}`                             |
+| [`--env <key=value...>`](#--env)           | `-e`             | Overrides environment variables (wins over template, SSM and `--param`)           | None                             |
+| [`--no-ssm`](#--no-ssm)                    |                  | Disables AWS SSM queries (uses `ssm.env`, YAML fallbacks, or mocks)               | `false` (queries real AWS SSM)   |
+| [`--scheduler`](#--scheduler)              |                  | Enable the local one-time Lambda Scheduler endpoint                               | `false`                          |
+| [`--cf-value <key=value...>`](#--cf-value) |                  | Override a reference (for example `ExampleRole.Arn=arn:...`)                      | None                             |
+| [`--show-env`](#--show-env)                |                  | Displays full, unmasked environment variables in console                          | `false` (masks sensitive values) |
+| [`--debug`](#--debug)                      | `-d`             | Enables verbose lifecycle debug logging with stage timings                        | `false`                          |
+| [`--version`](#--version)                  | `-v`, `-V`       | Displays the installed FreeSLS version                                            |                                  |
 
 > [!WARNING]
 > **Use AWS SAM Mode (`--sam`) with Caution**
@@ -205,6 +207,16 @@ Inject `key=value` pairs into `process.env` and expose them as `${param:key}`. R
 freesls --param deploymentStage=develop --param empty=
 ```
 
+#### `--env`
+
+Alias `-e`. Override the final environment variables as `key=value`. Repeatable. Values are applied after the template, SSM resolution, fallbacks, mocks and `--param`, so they always win. Use it to repoint a value loaded from SSM (for example a production table ARN) at a test resource without changing AWS.
+
+```bash
+freesls -s dev --profile my-org-dev \
+  -e USERS_TABLE=arn:aws:dynamodb:us-east-1:111122223333:table/users-test \
+  -e USER_COOKIES_TABLE_NAME=user-cookies-test
+```
+
 #### `--no-ssm`
 
 Disable AWS SSM queries and resolve `${ssm:/...}` from `ssm.env`, YAML fallbacks, or offline mocks. See Offline Mode below.
@@ -215,7 +227,7 @@ freesls --no-ssm
 
 #### `--scheduler`
 
-Enable the local one-time EventBridge Scheduler endpoint and inject `AWS_ENDPOINT_URL_SCHEDULER`. See Local Scheduler below.
+Enable the local one-time EventBridge Scheduler endpoint and inject `AWS_ENDPOINT_URL_SCHEDULER`. See Local Scheduler below. This flag also prints each function's simulated ARN under its endpoint.
 
 ```bash
 freesls --scheduler --no-ssm
@@ -280,6 +292,9 @@ freesls --scheduler --no-ssm --cf-value ExampleRole.Arn=arn:aws:iam::12345678901
 # Inject custom parameters into process.env and ${param:...}
 freesls -s dev --param domain=api.local --param deploymentStage=dev
 
+# Override environment variables (wins over template, SSM and --param)
+freesls -s dev --env USERS_TABLE=arn:aws:dynamodb:us-east-1:111122223333:table/users-test
+
 # Display all environment variable values in clear text
 freesls -s dev --show-env
 
@@ -304,7 +319,7 @@ freesls -s dev --debug
 5. At the scheduled time it invokes the **local** Lambda with `Input` (JSON). Nothing is sent to AWS.
 6. `GetSchedule`/`DeleteSchedule` read or remove the in-memory schedule.
 
-> The exact ARN is shown under each endpoint as `└─ arn: ...`. Copy that value for `Target.Arn`.
+> With `--scheduler`, the exact ARN is shown under each endpoint as `└─ arn: ...`. Copy that value for `Target.Arn`.
 
 ### End-to-end example
 
