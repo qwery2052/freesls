@@ -139,7 +139,7 @@ program
         Boolean(commandOptions.debug),
       );
       printEnvironmentSummary(globalEnv, Boolean(commandOptions.showEnv));
-      printRoutes(routes, serverPort, basePath);
+      printRoutes(routes, serverPort, basePath, Boolean(commandOptions.scheduler));
 
       if (commandOptions.scheduler) {
         const execute = createLambdaExecutor({

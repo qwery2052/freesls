@@ -36,7 +36,32 @@ test("shiny probability boundary and constant", () => {
   assert.equal(selectCatColors(() => SHINY_CHANCE / 2).shiny, true);
 });
 
-test("printRoutes shows the simulated ARN under the handler", t => {
+test("printRoutes shows the simulated ARN under the handler when enabled", t => {
+  const lines = [];
+  t.mock.method(console, "log", (...args) => lines.push(args.join(" ")));
+  const arn = "arn:aws:lambda:us-east-1:123456789012:function:demo-dev-cancel-campaign";
+  printRoutes(
+    [
+      {
+        functionName: "cancel-campaign",
+        handler: "src/functions/cancel-campaign/handler.cancelCampaignHandler",
+        method: "POST",
+        path: "/cancel-campaign",
+        environment: {},
+        arn,
+      },
+    ],
+    3000,
+    "/messaging-campaigns",
+    true,
+  );
+  const output = lines.join("\n");
+  assert.match(output, /└─ handler: /);
+  assert.match(output, /└─ arn: /);
+  assert.ok(output.includes(arn));
+});
+
+test("printRoutes hides the ARN by default", t => {
   const lines = [];
   t.mock.method(console, "log", (...args) => lines.push(args.join(" ")));
   const arn = "arn:aws:lambda:us-east-1:123456789012:function:demo-dev-cancel-campaign";
@@ -56,8 +81,8 @@ test("printRoutes shows the simulated ARN under the handler", t => {
   );
   const output = lines.join("\n");
   assert.match(output, /└─ handler: /);
-  assert.match(output, /└─ arn: /);
-  assert.ok(output.includes(arn));
+  assert.doesNotMatch(output, /└─ arn: /);
+  assert.ok(!output.includes(arn));
 });
 
 test("printRoutes omits the ARN line when the route has no ARN", t => {
@@ -67,6 +92,7 @@ test("printRoutes omits the ARN line when the route has no ARN", t => {
     [{ functionName: "demo", handler: "h.handler", method: "GET", path: "/demo", environment: {} }],
     3000,
     "",
+    true,
   );
   const output = lines.join("\n");
   assert.match(output, /└─ handler: /);

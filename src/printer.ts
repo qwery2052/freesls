@@ -174,7 +174,12 @@ export function printEnvironmentSummary(
   console.log();
 }
 
-export function printRoutes(routes: RouteDefinition[], port: number, basePath = "") {
+export function printRoutes(
+  routes: RouteDefinition[],
+  port: number,
+  basePath = "",
+  showArn = false,
+) {
   console.log(pc.dim("─".repeat(60)));
   console.log(`\n ${pc.bold("⚡ Registered Endpoints:")}\n`);
 
@@ -197,7 +202,7 @@ export function printRoutes(routes: RouteDefinition[], port: number, basePath = 
 
     console.log(`  ${methodBadge}  ${endpointUrl}`);
     console.log(`     ${handlerDetail}`);
-    if (route.arn) console.log(`     ${pc.dim("└─ arn: ")}${pc.cyan(route.arn)}`);
+    if (showArn && route.arn) console.log(`     ${pc.dim("└─ arn: ")}${pc.cyan(route.arn)}`);
     console.log();
   }
 

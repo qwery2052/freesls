@@ -215,7 +215,7 @@ freesls --no-ssm
 
 #### `--scheduler`
 
-Enable the local one-time EventBridge Scheduler endpoint and inject `AWS_ENDPOINT_URL_SCHEDULER`. See Local Scheduler below.
+Enable the local one-time EventBridge Scheduler endpoint and inject `AWS_ENDPOINT_URL_SCHEDULER`. See Local Scheduler below. This flag also prints each function's simulated ARN under its endpoint.
 
 ```bash
 freesls --scheduler --no-ssm
@@ -304,7 +304,7 @@ freesls -s dev --debug
 5. At the scheduled time it invokes the **local** Lambda with `Input` (JSON). Nothing is sent to AWS.
 6. `GetSchedule`/`DeleteSchedule` read or remove the in-memory schedule.
 
-> The exact ARN is shown under each endpoint as `└─ arn: ...`. Copy that value for `Target.Arn`.
+> With `--scheduler`, the exact ARN is shown under each endpoint as `└─ arn: ...`. Copy that value for `Target.Arn`.
 
 ### End-to-end example
 
