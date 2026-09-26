@@ -76,6 +76,7 @@ export interface ParserOptions {
   resolveSSM?: boolean;
   scheduler?: boolean;
   cfValues?: Record<string, string>;
+  envOverrides?: Record<string, string>;
 }
 
 /**
@@ -395,6 +396,7 @@ export async function loadServerlessConfig(
   const globalEnvironment = {
     ...DEFAULT_OFFLINE_ENV,
     ...resolveEnvironmentVariables(initialConfig.provider?.environment, context),
+    ...options.envOverrides,
   };
   Object.assign(process.env, globalEnvironment);
 
@@ -407,6 +409,10 @@ export async function loadServerlessConfig(
     functions,
     initialConfig.functions,
   );
+
+  // Explicit CLI environment overrides win over global and function environments.
+  for (const route of routeDefinitions) Object.assign(route.environment, options.envOverrides);
+  for (const fn of functions) Object.assign(fn.environment, options.envOverrides);
 
   return {
     config: finalConfig,

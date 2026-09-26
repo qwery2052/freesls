@@ -52,6 +52,7 @@ program
   .option("--prefix <prefix>", "Alias for --base-path")
   .option("--profile <profile>", "AWS CLI/SSO credential profile")
   .option("--param <params...>", "Parameters as key=value (e.g. deploymentStage=develop)")
+  .option("-e, --env <vars...>", "Override environment variables as key=value (highest precedence)")
   .option("--sam", "Use an AWS SAM template (template.yaml/template.yml)")
   .option("--sls", "Use Serverless Framework (serverless.yml) [default]")
   .option("--no-ssm", "Disable AWS SSM queries and use local fallbacks or mocks")
@@ -118,6 +119,7 @@ program
         cfValues: commandOptions.cfValue
           ? parseCliParameters(commandOptions.cfValue, "--cf-value")
           : undefined,
+        envOverrides: parseCliParameters(commandOptions.env, "--env"),
       };
 
       const {
