@@ -711,5 +711,6 @@ Contributions are welcome! Feel free to open an Issue or submit a Pull Request:
 ---
 
 ## 📜 License
-![](https://komarev.com/ghpvc/?username=qwery2052&label=VISITAS&color=7057ff&style=for-the-badge)
+![](https://komarev.com/ghpvc/?username=qwery2052&label=#&color=7057ff&style=for-the-badge)
+<br>
 This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
