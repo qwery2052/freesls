@@ -14,11 +14,14 @@
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg?style=flat-square" alt="Node Version" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.x-blue.svg?style=flat-square" alt="TypeScript" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="License" /></a>
-  <a href="https://buymeacoffee.com/myth.dev"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00.svg?style=flat-square&logo=buymeacoffee&logoColor=black" alt="Buy Me a Coffee" /></a>
+</p>
+
+<p align="center">
+  <a href="https://buymeacoffee.com/myth.dev" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" height="20" width="150"></a>
 </p>
 
 ```
-   /\_/\   FreeSLS v0.5.0-beta.0  [SLS] / [AWS SAM]
+   /\_/\   FreeSLS v0.5.0-beta.2  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
    > ^ <   ● Service: example-service [stage: dev]
 ────────────────────────────────────────────────────────────
@@ -32,6 +35,17 @@
 > - 🚧 **Work in Progress:** FreeSLS is under active and continuous development. Improvements, fixes, and new features are being released regularly.
 > - ⚠️ **AWS SAM Mode:** Running AWS SAM projects (`--sam`) is supported and has been validated on real projects. Use it with caution: some advanced CloudFormation features may still fail.
 > - ⚡ **Current Scope:** FreeSLS currently focuses specifically on running **AWS Lambda functions invoked via HTTP and HTTP API events (API Gateway)** for both **Serverless Framework** (`serverless.yml`) and **AWS SAM** (`template.yaml` / `template.yml`). Support for additional triggers (such as SQS, SNS, EventBridge, S3) is planned for upcoming releases. Feedback and suggestions are warmly welcomed!
+
+> [!IMPORTANT]
+> **🧪 Beta Release `v0.5.0-beta.2`**
+>
+> This pre-release focuses on upcoming `0.5.0` work. Changes currently under validation:
+>
+> - `--env` to override environment variables at runtime.
+> - Simulated ARNs for scheduled endpoints.
+> - Automatic update check with `--no-update-check` opt-out.
+>
+> Feedback on these changes is especially valuable before the stable `0.5.0` release.
 
 ---
 
@@ -70,6 +84,8 @@ pnpm add -g freesls
 yarn global add freesls
 ```
 
+> 💛 **FreeSLS is free and open source.** If it saves you time, consider [buying me a coffee](https://buymeacoffee.com/myth.dev) to keep development going.
+
 ### Alternative Installation Options
 
 You can also install it as a project development dependency:
@@ -85,6 +101,17 @@ Or run it on the fly without installing using `npx`:
 ```bash
 npx freesls -s dev -p 4000
 ```
+
+### 📦 Releases & Channels
+
+FreeSLS publishes both stable and pre-release versions to npm using **dist-tags**:
+
+| Channel | npm dist-tag | Install                       | Description                                                         |
+| ------- | ------------ | ----------------------------- | ------------------------------------------------------------------- |
+| Stable  | `latest`     | `npm install -g freesls`      | Latest stable release, recommended for production.                  |
+| Beta    | `beta`       | `npm install -g freesls@beta` | Pre-release builds for upcoming features. Feedback is very welcome. |
+
+Every release — stable or pre-release — is tagged in Git and published as a GitHub Release with notes. Pre-releases are marked as **Pre-release** and never become the default `latest` version, so `npm install freesls` always resolves to a stable build.
 
 ---
 
@@ -129,6 +156,7 @@ Or add a script to your `package.json`:
 | [`--cf-value <key=value...>`](#--cf-value) |                  | Override a reference (for example `ExampleRole.Arn=arn:...`)                      | None                             |
 | [`--show-env`](#--show-env)                |                  | Displays full, unmasked environment variables in console                          | `false` (masks sensitive values) |
 | [`--debug`](#--debug)                      | `-d`             | Enables verbose lifecycle debug logging with stage timings                        | `false`                          |
+| [`--no-update-check`](#--no-update-check)  |                  | Disables the automatic update check on startup                                    | `false` (checks for updates)     |
 | [`--version`](#--version)                  | `-v`, `-V`       | Displays the installed FreeSLS version                                            |                                  |
 
 > [!WARNING]
@@ -257,6 +285,14 @@ Alias `-d`. Verbose lifecycle logs with per-stage timings (path resolution, queu
 freesls --debug
 ```
 
+#### `--no-update-check`
+
+Disable the automatic update check. On startup FreeSLS queries the npm registry for a newer version on your release channel and prints a notice when one exists. The check runs in the background, never blocks or slows startup, and stays silent when offline. It is also disabled by the `FREESLS_NO_UPDATE_CHECK`, `NO_UPDATE_NOTIFIER` and `CI` environment variables, or when output is not a terminal.
+
+```bash
+freesls --no-update-check
+```
+
 #### `--version`
 
 Aliases `-v` and `-V`. Print the installed FreeSLS version.
@@ -300,6 +336,9 @@ freesls -s dev --show-env
 
 # Run with detailed lifecycle timing logs to trace bottlenecks
 freesls -s dev --debug
+
+# Skip the automatic update check on startup
+freesls -s dev --no-update-check
 ```
 
 ---
@@ -710,7 +749,18 @@ Contributions are welcome! Feel free to open an Issue or submit a Pull Request:
 
 ---
 
+## ☕ Support FreeSLS
+
+FreeSLS is free, open source, and built in my spare time. If it saves you time, consider buying me a coffee to keep development going (the AI doesn't pay for itself 🐾).
+
+<p align="center">
+  <a href="https://buymeacoffee.com/myth.dev" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" height="50" width="210"></a>
+</p>
+
+---
+
 ## 📜 License
+
 ![](https://komarev.com/ghpvc/?username=qwery2052&label=#&color=7057ff&style=for-the-badge)
 <br>
 This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.

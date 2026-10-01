@@ -14,11 +14,14 @@
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg?style=flat-square" alt="Node Version" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.x-blue.svg?style=flat-square" alt="TypeScript" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="License" /></a>
-  <a href="https://buymeacoffee.com/myth.dev"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00.svg?style=flat-square&logo=buymeacoffee&logoColor=black" alt="Buy Me a Coffee" /></a>
+</p>
+
+<p align="center">
+  <a href="https://buymeacoffee.com/myth.dev" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Invítame un café" height="20" width="150"></a>
 </p>
 
 ```
-   /\_/\   FreeSLS v0.5.0-beta.0  [SLS] / [AWS SAM]
+   /\_/\   FreeSLS v0.5.0-beta.2  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
    > ^ <   ● Service: example-service [stage: dev]
 ────────────────────────────────────────────────────────────
@@ -32,6 +35,17 @@
 > - 🚧 **En Desarrollo Continuo:** FreeSLS se encuentra en desarrollo activo y constante evolución. Se están incorporando mejoras, correcciones y nuevas capacidades continuamente.
 > - ⚠️ **Modo AWS SAM:** El soporte para proyectos AWS SAM (`--sam`) está disponible y se ha validado con proyectos reales. Úsalo con precaución: algunas características avanzadas de CloudFormation aún pueden fallar.
 > - ⚡ **Alcance Actual:** Por el momento, FreeSLS funciona exclusivamente con **funciones AWS Lambda invocadas mediante eventos HTTP y HTTP API (API Gateway)** tanto para **Serverless Framework** (`serverless.yml`) como para **AWS SAM** (`template.yaml` / `template.yml`). El soporte para otros desencadenadores (SQS, SNS, EventBridge, S3, etc.) está proyectado para futuras versiones. ¡El feedback y los aportes son bienvenidos!
+
+> [!IMPORTANT]
+> **🧪 Versión Beta `v0.5.0-beta.2`**
+>
+> Esta pre-versión se enfoca en el próximo trabajo de `0.5.0`. Cambios actualmente en validación:
+>
+> - `--env` para sobrescribir variables de entorno en tiempo de ejecución.
+> - ARNs simulados para endpoints programados.
+> - Chequeo automático de actualizaciones con opt-out `--no-update-check`.
+>
+> El feedback sobre estos cambios es especialmente valioso antes del lanzamiento estable `0.5.0`.
 
 ---
 
@@ -70,6 +84,8 @@ pnpm add -g freesls
 yarn global add freesls
 ```
 
+> 💛 **FreeSLS es gratuito y open source.** Si te ahorra tiempo, puedes [invitarme un café](https://buymeacoffee.com/myth.dev) para seguir impulsando el proyecto.
+
 ### Otras formas de uso:
 
 También puedes instalarlo como dependencia de desarrollo en tu proyecto:
@@ -85,6 +101,17 @@ O ejecutarlo directamente sin instalar previamente usando `npx`:
 ```bash
 npx freesls -s dev -p 4000
 ```
+
+### 📦 Versiones y Canales
+
+FreeSLS publica versiones estables y pre-versiones en npm usando **dist-tags**:
+
+| Canal   | Dist-tag de npm | Instalación                   | Descripción                                                                           |
+| ------- | --------------- | ----------------------------- | ------------------------------------------------------------------------------------- |
+| Estable | `latest`        | `npm install -g freesls`      | Última versión estable, recomendada para producción.                                  |
+| Beta    | `beta`          | `npm install -g freesls@beta` | Compilaciones pre-release de próximas funcionalidades. El feedback es muy bienvenido. |
+
+Cada versión —estable o pre-release— se etiqueta en Git y se publica como GitHub Release con notas. Las pre-versiones se marcan como **Pre-release** y nunca pasan a ser la versión `latest` por defecto, por lo que `npm install freesls` siempre resuelve a una compilación estable.
 
 ---
 
@@ -129,6 +156,7 @@ O agregar un script a tu `package.json`:
 | [`--cf-value <clave=valor...>`](#--cf-value) |                  | Sobrescribe una referencia (por ejemplo `ExampleRole.Arn=arn:...`)                     | Ninguno                          |
 | [`--show-env`](#--show-env)                  |                  | Muestra los valores de variables sin enmascarar en consola                             | `false` (enmascara secretos)     |
 | [`--debug`](#--debug)                        | `-d`             | Activa logs detallados del ciclo de vida con tiempos por etapa                         | `false`                          |
+| [`--no-update-check`](#--no-update-check)    |                  | Desactiva el chequeo automático de actualizaciones al iniciar                          | `false` (busca actualizaciones)  |
 | [`--version`](#--version)                    | `-v`, `-V`       | Muestra la versión actual instalada                                                    |                                  |
 
 > [!WARNING]
@@ -257,6 +285,14 @@ Alias `-d`. Logs detallados del ciclo de vida con tiempos por etapa (resolución
 freesls --debug
 ```
 
+#### `--no-update-check`
+
+Desactiva el chequeo automático de actualizaciones. Al iniciar, FreeSLS consulta el registro de npm una versión más reciente de tu canal y muestra un aviso cuando existe. El chequeo se ejecuta en segundo plano, nunca bloquea ni retrasa el arranque y permanece silencioso si no hay conexión. También se desactiva con las variables de entorno `FREESLS_NO_UPDATE_CHECK`, `NO_UPDATE_NOTIFIER` y `CI`, o cuando la salida no es una terminal.
+
+```bash
+freesls --no-update-check
+```
+
 #### `--version`
 
 Alias `-v` y `-V`. Muestra la versión instalada de FreeSLS.
@@ -300,6 +336,9 @@ freesls -s dev --show-env
 
 # Ejecutar con logs de depuración para rastrear tiempos y cuellos de botella
 freesls -s dev --debug
+
+# Omitir el chequeo automático de actualizaciones al iniciar
+freesls -s dev --no-update-check
 ```
 
 ---
@@ -710,7 +749,18 @@ npm run format
 
 ---
 
+## ☕ Apoya a FreeSLS
+
+FreeSLS es gratuito, open source y lo desarrollo en mi tiempo libre. Si te ahorra tiempo, puedes invitarme un café para seguir impulsando el proyecto (la IA no se paga sola 🐾).
+
+<p align="center">
+  <a href="https://buymeacoffee.com/myth.dev" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Invítame un café" height="50" width="210"></a>
+</p>
+
+---
+
 ## 📜 Licencia
+
 ![](https://komarev.com/ghpvc/?username=qwery2052&label=#&color=7057ff&style=for-the-badge)
 <br>
 Este proyecto está bajo la Licencia MIT. Consulta el archivo [LICENSE](LICENSE) para más detalles.
