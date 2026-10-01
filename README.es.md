@@ -711,5 +711,6 @@ npm run format
 ---
 
 ## 📜 Licencia
-
+![](https://komarev.com/ghpvc/?username=qwery2052&label=#&color=7057ff&style=for-the-badge)
+<br>
 Este proyecto está bajo la Licencia MIT. Consulta el archivo [LICENSE](LICENSE) para más detalles.
