@@ -1,6 +1,7 @@
 import pc from "picocolors";
 import type { RouteDefinition } from "./types.js";
 import type { SchedulerEvent } from "./scheduler.js";
+import { PACKAGE_NAME } from "./update-check.js";
 
 const CAT_EMOJIS = ["🐱", "😺", "😸", "😻", "😼", "🙀", "🐈", "🐾"] as const;
 
@@ -77,7 +78,7 @@ export function printBanner(
   const shinyBadge = shiny ? `  ${pc.bold(pc.bgYellow(pc.black(" ✨ SHINY ")))}` : "";
 
   const bannerArt = `
-   ${pc[colors[0]]("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.5.0-beta.0")}  ${frameworkBadge}${debugBadge}${shinyBadge}
+   ${pc[colors[0]]("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.5.0-beta.2")}  ${frameworkBadge}${debugBadge}${shinyBadge}
   ${pc[colors[1]]("( o.o )")}  ${pc.dim("Offline API Gateway & Lambda Runner")}
    ${pc[colors[2]]("> ^ <")}   ${pc.green("●")} Service: ${pc.bold(serviceName)} ${pc.dim(`[stage: ${stage}]`)}
   `;
@@ -91,6 +92,15 @@ export function printBanner(
     ` ${pc.bold("Local Endpoint:")} ${pc.underline(pc.cyan(`http://localhost:${port}${cleanBase}`))}`,
   );
   console.log(pc.dim("─".repeat(60)));
+}
+
+export function printUpdateNotice(currentVersion: string, latestVersion: string) {
+  console.log(
+    `\n ${pc.magenta("🐾")} ${pc.bold(pc.yellow("Update available:"))} ${pc.dim(`v${currentVersion}`)} ${pc.dim("→")} ${pc.bold(pc.green(`v${latestVersion}`))}`,
+  );
+  console.log(
+    `   ${pc.dim("Run")} ${pc.cyan(`npm install -g ${PACKAGE_NAME}@latest`)} ${pc.dim("to update")}`,
+  );
 }
 
 export function logDebug(stage: string, message: string, elapsedMs?: number, requestId?: string) {

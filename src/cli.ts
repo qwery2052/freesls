@@ -11,11 +11,15 @@ import {
   printSchedulerEvent,
   printLambdaStart,
   printSsmResolutionError,
+  printUpdateNotice,
 } from "./printer.js";
 import { startServer, createLambdaExecutor } from "./server.js";
 import { LocalScheduler, startScheduler } from "./scheduler.js";
 import { SSMParameterNotFoundError } from "./ssm.js";
 import { DEFAULT_OFFLINE_ENV } from "./types.js";
+import { checkForUpdate, isUpdateCheckDisabled } from "./update-check.js";
+
+const VERSION = "0.5.0-beta.2";
 
 const program = new Command();
 
@@ -41,7 +45,7 @@ function parseCliParameters(parameterEntries?: string[], flag = "--param"): Reco
 program
   .name("freesls")
   .description("Offline API Gateway & Lambda Runner (Serverless Framework & AWS SAM)")
-  .version("0.5.0-beta.0", "-v, --version", "Output the current version number")
+  .version(VERSION, "-v, --version", "Output the current version number")
   .option("-s, --stage <stage>", "Deployment stage", "develop")
   .option("-r, --region <region>", "AWS region", "us-east-1")
   .option("-p, --port <port>", "Local HTTP server port", "4000")
@@ -62,6 +66,7 @@ program
     "Explicit reference values: LogicalId.Attribute=value or Outputs.Key=value",
   )
   .option("--show-env", "Display full environment values without masking", false)
+  .option("--no-update-check", "Disable the automatic update check")
   .option("-d, --debug", "Enable verbose lifecycle debug logging with stage timings", false)
   .action(async commandOptions => {
     let schedulerServer: Awaited<ReturnType<typeof startScheduler>> | undefined;
@@ -142,6 +147,14 @@ program
       );
       printEnvironmentSummary(globalEnv, Boolean(commandOptions.showEnv));
       printRoutes(routes, serverPort, basePath, Boolean(commandOptions.scheduler));
+
+      if (commandOptions.updateCheck && process.stdout.isTTY && !isUpdateCheckDisabled()) {
+        void checkForUpdate(VERSION)
+          .then(latestVersion => {
+            if (latestVersion) printUpdateNotice(VERSION, latestVersion);
+          })
+          .catch(() => {});
+      }
 
       if (commandOptions.scheduler) {
         const execute = createLambdaExecutor({
