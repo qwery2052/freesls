@@ -4,10 +4,16 @@ import {
   type ServerlessConfig,
   type RouteDefinition,
   type FunctionDefinition,
+  type ScheduleDefinition,
   type LoadResult,
   DEFAULT_OFFLINE_ENV,
 } from "./types.js";
 import { parseYaml, resolveSSMValues, type ParserOptions } from "./parser.js";
+import {
+  boundedScheduleName,
+  parseRecurringExpression,
+  validateScheduleName,
+} from "./schedule-expression.js";
 import {
   extractSSMPaths,
   resolveScalarData,
@@ -29,6 +35,27 @@ export interface SamEventDefinition {
     Method?: string;
     RestApiId?: string;
     PayloadFormatVersion?: string | number;
+    Schedule?: string;
+    ScheduleExpression?: string;
+    ScheduleExpressionTimezone?: string;
+    Enabled?: boolean | string;
+    State?: string;
+    Input?: unknown;
+    Name?: string;
+    Description?: string;
+    FlexibleTimeWindow?: {
+      Mode?: string;
+      MaximumWindowInMinutes?: number;
+    };
+    StartDate?: string;
+    EndDate?: string;
+    KmsKeyArn?: string;
+    GroupName?: string;
+    RoleArn?: string;
+    PermissionsBoundary?: string;
+    OmitName?: boolean;
+    DeadLetterConfig?: unknown;
+    RetryPolicy?: unknown;
   };
 }
 
@@ -639,6 +666,182 @@ function extractSamFunctionRoutes(
   return routes;
 }
 
+function samScheduleScalar(value: unknown, field: string): string {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  throw new Error(`${field} must resolve to a string.`);
+}
+
+function assertNoSamScheduleIntrinsic(value: unknown, field: string): void {
+  if (Array.isArray(value)) {
+    for (const item of value) assertNoSamScheduleIntrinsic(item, field);
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).some(key => key === "Ref" || key.startsWith("Fn::"))) {
+    throw new Error(
+      `${field} contains an unresolved intrinsic. Use supported references or a literal JSON value.`,
+    );
+  }
+  for (const item of Object.values(record)) assertNoSamScheduleIntrinsic(item, field);
+}
+
+function parseSamScheduleInput(value: unknown, field: string): unknown {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") {
+    assertNoSamScheduleIntrinsic(value, field);
+    return value;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    throw new Error(`${field} must be valid JSON text.`);
+  }
+}
+
+function samScheduleEnabled(
+  properties: NonNullable<SamEventDefinition["Properties"]>,
+  eventType: "Schedule" | "ScheduleV2",
+  field: string,
+): boolean {
+  if (eventType === "ScheduleV2" && properties.Enabled !== undefined) {
+    throw new Error(`${field} uses State, not Enabled, for ScheduleV2.`);
+  }
+  if (
+    eventType === "Schedule" &&
+    properties.Enabled !== undefined &&
+    properties.State !== undefined
+  ) {
+    throw new Error(`${field} must use Enabled or State, not both.`);
+  }
+
+  if (properties.Enabled !== undefined) {
+    if (
+      typeof properties.Enabled !== "boolean" &&
+      properties.Enabled !== "true" &&
+      properties.Enabled !== "false"
+    ) {
+      throw new Error(`${field} Enabled must be true or false.`);
+    }
+    return properties.Enabled === true || properties.Enabled === "true";
+  }
+  if (properties.State === undefined) return true;
+  if (properties.State !== "ENABLED" && properties.State !== "DISABLED") {
+    throw new Error(`${field} State accepts ENABLED or DISABLED.`);
+  }
+  return properties.State === "ENABLED";
+}
+
+function extractSamFunctionSchedules(
+  functionName: string,
+  functionProperties: SamFunctionProperties,
+  handler: string,
+  functionEnvironment: Record<string, string>,
+  functionArn: string,
+  options: ParserOptions,
+): ScheduleDefinition[] {
+  const schedules: ScheduleDefinition[] = [];
+  const rawEvents = functionProperties.Events;
+  const eventEntries: Array<[string, SamEventDefinition]> = Array.isArray(rawEvents)
+    ? rawEvents.map((event, index) => [`Schedule${index + 1}`, event])
+    : Object.entries(rawEvents || {});
+  const partition = awsPartition(options.region);
+  const account = "123456789012";
+
+  for (const [eventKey, event] of eventEntries) {
+    const eventType = event?.Type;
+    if (eventType !== "Schedule" && eventType !== "ScheduleV2") continue;
+
+    const properties = event.Properties || {};
+    const fieldPrefix = `${eventType} for function ${functionName} (${eventKey})`;
+    const isScheduler = eventType === "ScheduleV2";
+
+    if (properties.FlexibleTimeWindow !== undefined) {
+      const window = properties.FlexibleTimeWindow;
+      if (!window || typeof window !== "object" || Array.isArray(window)) {
+        throw new Error(`${fieldPrefix} FlexibleTimeWindow must be an object.`);
+      }
+      if (window.Mode !== undefined && window.Mode !== "OFF") {
+        throw new Error(`${fieldPrefix} supports only FlexibleTimeWindow Mode OFF locally.`);
+      }
+    }
+    if (properties.StartDate !== undefined || properties.EndDate !== undefined) {
+      throw new Error(
+        `${fieldPrefix} does not support StartDate/EndDate locally. Use the cron year field to bound a schedule.`,
+      );
+    }
+    if (properties.DeadLetterConfig !== undefined || properties.RetryPolicy !== undefined) {
+      throw new Error(
+        `${fieldPrefix} does not emulate DeadLetterConfig or RetryPolicy. Remove them for local execution.`,
+      );
+    }
+    if (properties.GroupName !== undefined && properties.GroupName !== "default") {
+      throw new Error(`${fieldPrefix} supports only GroupName default locally.`);
+    }
+
+    const expression =
+      eventType === "Schedule"
+        ? samScheduleScalar(properties.Schedule, `${fieldPrefix} Schedule`)
+        : samScheduleScalar(properties.ScheduleExpression, `${fieldPrefix} ScheduleExpression`);
+    const timezone =
+      eventType === "Schedule"
+        ? "UTC"
+        : properties.ScheduleExpressionTimezone === undefined
+          ? "UTC"
+          : samScheduleScalar(
+              properties.ScheduleExpressionTimezone,
+              `${fieldPrefix} ScheduleExpressionTimezone`,
+            );
+
+    try {
+      parseRecurringExpression(expression, timezone);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Invalid schedule for function ${functionName}: ${message}`);
+    }
+
+    const scheduleName =
+      properties.Name === undefined
+        ? validateScheduleName(
+            boundedScheduleName(`${functionName}${eventKey}`),
+            `Generated schedule name for function ${functionName}`,
+          )
+        : validateScheduleName(
+            samScheduleScalar(properties.Name, `${fieldPrefix} Name`),
+            `${fieldPrefix} Name`,
+          );
+    const description =
+      properties.Description === undefined
+        ? undefined
+        : samScheduleScalar(properties.Description, `${fieldPrefix} Description`);
+    if (description !== undefined && description.length > 512) {
+      throw new Error(`${fieldPrefix} Description must be at most 512 characters.`);
+    }
+
+    schedules.push({
+      functionName,
+      handler,
+      environment: functionEnvironment,
+      arn: functionArn,
+      scheduleName,
+      expression,
+      enabled: samScheduleEnabled(properties, eventType, fieldPrefix),
+      method: isScheduler ? "scheduler" : "eventBus",
+      timezone,
+      description,
+      input: parseSamScheduleInput(properties.Input, `${fieldPrefix} Input`),
+      ruleArn: isScheduler
+        ? `arn:${partition}:scheduler:${options.region}:${account}:schedule/default/${scheduleName}`
+        : `arn:${partition}:events:${options.region}:${account}:rule/${scheduleName}`,
+      region: options.region,
+      account,
+    });
+  }
+
+  return schedules;
+}
+
 /**
  * Load an AWS SAM template.
  */
@@ -723,9 +926,10 @@ export async function loadSamConfig(
   };
   Object.assign(process.env, globalEnvironment);
 
-  // Extract function routes.
+  // Extract function routes and declared schedules.
   const routeDefinitions: RouteDefinition[] = [];
   const functions: FunctionDefinition[] = [];
+  const scheduleDefinitions: ScheduleDefinition[] = [];
   const arns = new Set<string>();
   const resources = finalConfig.Resources || {};
 
@@ -769,6 +973,30 @@ export async function loadSamConfig(
     });
     for (const route of functionRoutes) route.arn = arn;
     routeDefinitions.push(...functionRoutes);
+    if (options.cron) {
+      scheduleDefinitions.push(
+        ...extractSamFunctionSchedules(
+          resourceName,
+          properties,
+          handler,
+          functionEnv,
+          arn,
+          options,
+        ),
+      );
+    }
+  }
+
+  const seenScheduleNames = new Map<string, string>();
+  for (const schedule of scheduleDefinitions) {
+    const key = `${schedule.method}:${schedule.scheduleName}`;
+    const previousFunction = seenScheduleNames.get(key);
+    if (previousFunction !== undefined) {
+      throw new Error(
+        `Duplicate ${schedule.method} schedule name ${schedule.scheduleName} in functions ${previousFunction} and ${schedule.functionName}. Use a unique name per method.`,
+      );
+    }
+    seenScheduleNames.set(key, schedule.functionName);
   }
 
   const serverlessLikeConfig: ServerlessConfig = {
@@ -785,6 +1013,7 @@ export async function loadSamConfig(
     config: serverlessLikeConfig,
     routes: routeDefinitions,
     functions,
+    schedules: scheduleDefinitions,
     globalEnv: globalEnvironment,
     framework: "sam",
   };

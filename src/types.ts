@@ -40,10 +40,26 @@ export interface RouteDefinition extends FunctionDefinition {
   payloadVersion?: "1.0" | "2.0";
 }
 
+export type ScheduleTriggerMethod = "eventBus" | "scheduler";
+
+export interface ScheduleDefinition extends FunctionDefinition {
+  scheduleName: string;
+  expression: string;
+  enabled: boolean;
+  method: ScheduleTriggerMethod;
+  timezone: string;
+  description?: string;
+  input?: unknown;
+  ruleArn: string;
+  region: string;
+  account: string;
+}
+
 export interface LoadResult {
   config: ServerlessConfig;
   routes: RouteDefinition[];
   functions?: FunctionDefinition[];
+  schedules?: ScheduleDefinition[];
   globalEnv: Record<string, string>;
   framework?: "serverless" | "sam";
 }

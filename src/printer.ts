@@ -1,6 +1,8 @@
 import pc from "picocolors";
-import type { RouteDefinition } from "./types.js";
+import type { RouteDefinition, ScheduleDefinition } from "./types.js";
 import type { SchedulerEvent } from "./scheduler.js";
+import type { ScheduleRunEvent } from "./schedule-runner.js";
+import { nextCronInstant, parseRecurringExpression } from "./schedule-expression.js";
 import { PACKAGE_NAME } from "./update-check.js";
 
 const CAT_EMOJIS = ["🐱", "😺", "😸", "😻", "😼", "🙀", "🐈", "🐾"] as const;
@@ -78,7 +80,7 @@ export function printBanner(
   const shinyBadge = shiny ? `  ${pc.bold(pc.bgYellow(pc.black(" ✨ SHINY ")))}` : "";
 
   const bannerArt = `
-   ${pc[colors[0]]("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.5.0-beta.2")}  ${frameworkBadge}${debugBadge}${shinyBadge}
+   ${pc[colors[0]]("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.6.0-beta.0")}  ${frameworkBadge}${debugBadge}${shinyBadge}
   ${pc[colors[1]]("( o.o )")}  ${pc.dim("Offline API Gateway & Lambda Runner")}
    ${pc[colors[2]]("> ^ <")}   ${pc.green("●")} Service: ${pc.bold(serviceName)} ${pc.dim(`[stage: ${stage}]`)}
   `;
@@ -292,6 +294,85 @@ export function printSchedulerEvent(
     case "failed":
       console.log(
         `${face} ${pc.bold(pc.red("[Scheduler]"))} Delivery failed (retries exhausted) ${pc.bold(event.name)}`,
+      );
+      break;
+  }
+}
+
+function nextScheduleDue(schedule: ScheduleDefinition, now: number): number | null {
+  const parsed = parseRecurringExpression(schedule.expression, schedule.timezone);
+  if (parsed.kind === "cron") return nextCronInstant(parsed, now);
+  return now + parsed.intervalMs;
+}
+
+/**
+ * Print declared serverless/SAM schedule events. Never includes Target.Input.
+ */
+export function printSchedules(schedules: ScheduleDefinition[], showArns = false) {
+  console.log(pc.dim("─".repeat(60)));
+  console.log(`\n ${pc.bold("⏰ Registered Schedules:")} ${pc.dim(`(${schedules.length})`)}\n`);
+
+  if (schedules.length === 0) {
+    console.log(pc.yellow("  ⚠️  No schedule events found in this configuration.\n"));
+    return;
+  }
+
+  const now = Date.now();
+  for (const schedule of schedules) {
+    const state = schedule.enabled ? pc.green("ENABLED") : pc.yellow("DISABLED");
+    let dueText = "disabled";
+    if (schedule.enabled) {
+      const due = nextScheduleDue(schedule, now);
+      dueText = due
+        ? `${new Date(due).toISOString()} (${schedule.timezone})`
+        : "no future occurrence";
+    }
+
+    console.log(
+      `  ${state}  ${pc.bold(pc.white(schedule.scheduleName))} ${pc.dim("→")} ${pc.yellow(schedule.functionName)}`,
+    );
+    console.log(
+      `     ${pc.dim("├─ expression:")} ${pc.cyan(schedule.expression)} ${pc.dim(`(${schedule.timezone})`)}`,
+    );
+    console.log(`     ${pc.dim("├─ method:")}     ${pc.white(schedule.method)}`);
+    if (showArns) console.log(`     ${pc.dim("├─ arn:")}        ${pc.cyan(schedule.ruleArn)}`);
+    console.log(`     ${pc.dim("└─ next:")}       ${pc.white(dueText)}`);
+    console.log();
+  }
+
+  console.log(pc.dim("─".repeat(60)));
+  console.log(pc.italic(pc.dim("  Schedules are in-memory; Ctrl+C to stop.\n")));
+}
+
+/**
+ * Print declared schedule lifecycle events. Never includes Target.Input.
+ */
+export function printScheduleEvent(event: ScheduleRunEvent) {
+  const face = pc.magenta(randomCatFace());
+  const schedule = event.schedule;
+
+  switch (event.type) {
+    case "registered":
+      // The startup table already lists every rule.
+      break;
+    case "firing":
+      console.log(
+        `\n${face} ${pc.bold(pc.cyan("[Schedule]"))} Firing ${pc.bold(schedule.scheduleName)} ${pc.dim("→")} ${pc.yellow(schedule.functionName)}`,
+      );
+      break;
+    case "delivered":
+      console.log(
+        `${face} ${pc.bold(pc.green("[Schedule]"))} Delivered ${pc.bold(schedule.scheduleName)}${event.next ? `${pc.dim(" · next")} ${pc.white(new Date(event.next).toISOString())}` : ""}`,
+      );
+      break;
+    case "failed":
+      console.log(
+        `${face} ${pc.bold(pc.red("[Schedule]"))} Invocation failed ${pc.bold(schedule.scheduleName)} ${pc.dim("→")} ${pc.yellow(schedule.functionName)}`,
+      );
+      break;
+    case "completed":
+      console.log(
+        `${face} ${pc.bold(pc.yellow("[Schedule]"))} No future occurrences ${pc.bold(schedule.scheduleName)}`,
       );
       break;
   }

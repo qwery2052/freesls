@@ -2,6 +2,7 @@ import express from "express";
 import http from "node:http";
 import { randomUUID } from "node:crypto";
 import { awsPartition } from "./resolver.js";
+import { createTimeZoneFormatter, wallClockCandidates } from "./schedule-expression.js";
 
 export class SchedulerError extends Error {
   constructor(
@@ -45,10 +46,11 @@ function canonicalize(value: unknown): unknown {
 
 /** Interpret wall-clock dates independently of the host timezone. Reject DST ambiguity explicitly. */
 export function scheduleInstant(expression: unknown, timezone: unknown = "UTC"): number {
-  if (
-    typeof expression !== "string" ||
-    !/^at\(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\)$/.test(expression)
-  )
+  const match =
+    typeof expression === "string"
+      ? /^at\((\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\)$/.exec(expression)
+      : null;
+  if (!match)
     invalid(
       "Supported schedule expression: at(YYYY-MM-DDTHH:mm:ss). cron/rate are not supported locally.",
     );
@@ -56,44 +58,35 @@ export function scheduleInstant(expression: unknown, timezone: unknown = "UTC"):
     invalid(
       "ScheduleExpressionTimezone must be an IANA time zone, for example America/Bogota or UTC.",
     );
-  const wall = expression.slice(3, -1);
+  const [, year, month, day, hour, minute, second] = match;
+  const wall = `${year}-${month}-${day}T${hour}:${minute}:${second}`;
   const utc = Date.parse(`${wall}Z`);
   if (!Number.isFinite(utc) || new Date(utc).toISOString().slice(0, 19) !== wall)
     invalid("ScheduleExpression contains an invalid calendar date.");
   let formatter: Intl.DateTimeFormat;
   try {
-    formatter = new Intl.DateTimeFormat("en-GB", {
-      timeZone: timezone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hourCycle: "h23",
-    });
+    formatter = createTimeZoneFormatter(timezone);
   } catch {
     invalid(
       "Unknown ScheduleExpressionTimezone. Use an IANA time zone, for example America/Bogota or UTC.",
     );
   }
-  const localEpoch = (time: number) => {
-    const parts = Object.fromEntries(formatter.formatToParts(time).map(p => [p.type, p.value]));
-    return Date.parse(
-      `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}Z`,
-    );
-  };
-  const candidates = new Set<number>();
-  for (const delta of [-172800000, -86400000, 0, 86400000, 172800000]) {
-    const probe = utc + delta;
-    const candidate = utc - (localEpoch(probe) - probe);
-    if (localEpoch(candidate) === utc) candidates.add(candidate);
-  }
-  if (candidates.size !== 1)
+  const candidates = wallClockCandidates(
+    {
+      year: Number(year),
+      month: Number(month),
+      day: Number(day),
+      hour: Number(hour),
+      minute: Number(minute),
+      second: Number(second),
+    },
+    formatter,
+  );
+  if (candidates.length !== 1)
     invalid(
       "This local date is missing or ambiguous during a timezone transition. Use an unambiguous date or an explicit UTC schedule; local DST gap/overlap emulation is not supported.",
     );
-  return [...candidates][0];
+  return candidates[0];
 }
 
 export interface SchedulerClock {

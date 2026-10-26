@@ -9,17 +9,20 @@ import {
   printEnvironmentSummary,
   printRoutes,
   printSchedulerEvent,
+  printSchedules,
+  printScheduleEvent,
   printLambdaStart,
   printSsmResolutionError,
   printUpdateNotice,
 } from "./printer.js";
 import { startServer, createLambdaExecutor } from "./server.js";
 import { LocalScheduler, startScheduler } from "./scheduler.js";
+import { LocalScheduleRunner } from "./schedule-runner.js";
 import { SSMParameterNotFoundError } from "./ssm.js";
 import { DEFAULT_OFFLINE_ENV } from "./types.js";
 import { checkForUpdate, isUpdateCheckDisabled } from "./update-check.js";
 
-const VERSION = "0.5.0-beta.2";
+const VERSION = "0.6.0-beta.0";
 
 const program = new Command();
 
@@ -61,6 +64,7 @@ program
   .option("--sls", "Use Serverless Framework (serverless.yml) [default]")
   .option("--no-ssm", "Disable AWS SSM queries and use local fallbacks or mocks")
   .option("--scheduler", "Enable the local one-time Lambda Scheduler endpoint")
+  .option("--cron", "Run declared schedule events locally (cron/rate)")
   .option(
     "--cf-value <values...>",
     "Explicit reference values: LogicalId.Attribute=value or Outputs.Key=value",
@@ -70,6 +74,7 @@ program
   .option("-d, --debug", "Enable verbose lifecycle debug logging with stage timings", false)
   .action(async commandOptions => {
     let schedulerServer: Awaited<ReturnType<typeof startScheduler>> | undefined;
+    let scheduleRunner: LocalScheduleRunner | undefined;
     const priorEndpoint = process.env.AWS_ENDPOINT_URL_SCHEDULER;
     const restoreEndpoint = () => {
       if (priorEndpoint === undefined) delete process.env.AWS_ENDPOINT_URL_SCHEDULER;
@@ -121,6 +126,7 @@ program
         params: customParameters,
         resolveSSM: commandOptions.ssm !== false,
         scheduler: Boolean(commandOptions.scheduler),
+        cron: Boolean(commandOptions.cron),
         cfValues: commandOptions.cfValue
           ? parseCliParameters(commandOptions.cfValue, "--cf-value")
           : undefined,
@@ -131,6 +137,7 @@ program
         config,
         routes,
         functions = [],
+        schedules = [],
         globalEnv,
         framework,
       } = isSamMode
@@ -147,6 +154,9 @@ program
       );
       printEnvironmentSummary(globalEnv, Boolean(commandOptions.showEnv));
       printRoutes(routes, serverPort, basePath, Boolean(commandOptions.scheduler));
+      if (commandOptions.cron) {
+        printSchedules(schedules, Boolean(commandOptions.scheduler || commandOptions.debug));
+      }
 
       if (commandOptions.updateCheck && process.stdout.isTTY && !isUpdateCheckDisabled()) {
         void checkForUpdate(VERSION)
@@ -156,14 +166,18 @@ program
           .catch(() => {});
       }
 
+      const execute =
+        commandOptions.scheduler || commandOptions.cron
+          ? createLambdaExecutor({
+              port: serverPort,
+              workingDir: process.cwd(),
+              stage: commandOptions.stage,
+              region: commandOptions.region,
+              debug: Boolean(commandOptions.debug),
+            })
+          : undefined;
+
       if (commandOptions.scheduler) {
-        const execute = createLambdaExecutor({
-          port: serverPort,
-          workingDir: process.cwd(),
-          stage: commandOptions.stage,
-          region: commandOptions.region,
-          debug: Boolean(commandOptions.debug),
-        });
         const registry = new Map(functions.filter(fn => fn.arn).map(fn => [fn.arn!, fn]));
         if (registry.size !== functions.length) {
           throw new Error(
@@ -180,7 +194,7 @@ program
             printLambdaStart(target.functionName);
             // Acceptance and asynchronous handler completion are separate boundaries.
             void Promise.resolve()
-              .then(() => execute(target, payload))
+              .then(() => execute!(target, payload))
               .catch(() => {
                 console.error(
                   `[FreeSLS Lambda] Scheduled invocation failed for ${target.functionName}. Inspect the handler with --debug; payload and error contents are omitted.`,
@@ -202,6 +216,19 @@ program
         );
       }
 
+      if (commandOptions.cron && schedules.length > 0) {
+        scheduleRunner = new LocalScheduleRunner(
+          schedules,
+          async (schedule, event) => {
+            printLambdaStart(schedule.functionName);
+            await execute!(schedule, event);
+          },
+          undefined,
+          event => printScheduleEvent(event),
+        );
+        scheduleRunner.start();
+      }
+
       const serverInstance = await startServer(routes, serverPort, process.cwd(), {
         stage: commandOptions.stage,
         region: commandOptions.region,
@@ -214,6 +241,7 @@ program
         if (shuttingDown) return;
         shuttingDown = true;
         console.log(pc.dim("\n🐾 Shutting down FreeSLS..."));
+        scheduleRunner?.close();
         await schedulerServer?.close();
         restoreEndpoint();
         serverInstance.close(() => {
@@ -224,6 +252,7 @@ program
       process.on("SIGINT", handleShutdown);
       process.on("SIGTERM", handleShutdown);
     } catch (error) {
+      scheduleRunner?.close();
       await schedulerServer?.close();
       restoreEndpoint();
       if (error instanceof SSMParameterNotFoundError) {

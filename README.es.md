@@ -21,7 +21,7 @@
 </p>
 
 ```
-   /\_/\   FreeSLS v0.5.0-beta.2  [SLS] / [AWS SAM]
+   /\_/\   FreeSLS v0.6.0-beta.0  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
    > ^ <   ● Service: example-service [stage: dev]
 ────────────────────────────────────────────────────────────
@@ -34,18 +34,19 @@
 >
 > - 🚧 **En Desarrollo Continuo:** FreeSLS se encuentra en desarrollo activo y constante evolución. Se están incorporando mejoras, correcciones y nuevas capacidades continuamente.
 > - ⚠️ **Modo AWS SAM:** El soporte para proyectos AWS SAM (`--sam`) está disponible y se ha validado con proyectos reales. Úsalo con precaución: algunas características avanzadas de CloudFormation aún pueden fallar.
-> - ⚡ **Alcance Actual:** Por el momento, FreeSLS funciona exclusivamente con **funciones AWS Lambda invocadas mediante eventos HTTP y HTTP API (API Gateway)** tanto para **Serverless Framework** (`serverless.yml`) como para **AWS SAM** (`template.yaml` / `template.yml`). El soporte para otros desencadenadores (SQS, SNS, EventBridge, S3, etc.) está proyectado para futuras versiones. ¡El feedback y los aportes son bienvenidos!
+> - ⚡ **Alcance Actual:** FreeSLS se enfoca en **funciones AWS Lambda invocadas mediante eventos HTTP y HTTP API (API Gateway)** y en **reglas programadas de EventBridge** declaradas en el template, tanto para **Serverless Framework** (`serverless.yml`) como para **AWS SAM** (`template.yaml` / `template.yml`). El soporte para otros desencadenadores (SQS, SNS, S3, etc.) está proyectado para futuras versiones. ¡El feedback y los aportes son bienvenidos!
 
 > [!IMPORTANT]
-> **🧪 Versión Beta `v0.5.0-beta.2`**
+> **🧪 Versión Beta `v0.6.0-beta.0`**
 >
-> Esta pre-versión se enfoca en el próximo trabajo de `0.5.0`. Cambios actualmente en validación:
+> Esta pre-versión se enfoca en el próximo trabajo de `0.6.0`. Cambios actualmente en validación:
 >
-> - `--env` para sobrescribir variables de entorno en tiempo de ejecución.
-> - ARNs simulados para endpoints programados.
-> - Chequeo automático de actualizaciones con opt-out `--no-update-check`.
+> - `--cron` para ejecutar eventos `schedule` declarados, con sintaxis AWS de cron/rate.
+> - Cron de seis campos con `L`, `W`, `#`, zonas horarias y manejo de DST.
+> - `Schedule`/`ScheduleV2` de SAM y métodos `eventBus`/`scheduler` de Serverless.
+> - `--cron` y `--scheduler` se pueden combinar.
 >
-> El feedback sobre estos cambios es especialmente valioso antes del lanzamiento estable `0.5.0`.
+> El feedback sobre estos cambios es especialmente valioso antes del lanzamiento estable `0.6.0`.
 
 ---
 
@@ -153,6 +154,7 @@ O agregar un script a tu `package.json`:
 | [`--env <clave=valor...>`](#--env)           | `-e`             | Sobrescribe variables de entorno (gana sobre template, SSM y `--param`)                | Ninguno                          |
 | [`--no-ssm`](#--no-ssm)                      |                  | Desactiva consultas a AWS SSM (usa `ssm.env`, fallbacks o mocks)                       | `false` (resuelve SSM real)      |
 | [`--scheduler`](#--scheduler)                |                  | Activa el endpoint Scheduler local para Lambdas y ejecuciones únicas                   | `false`                          |
+| [`--cron`](#--cron)                          |                  | Ejecuta localmente los eventos `schedule` declarados (cron/rate)                       | `false`                          |
 | [`--cf-value <clave=valor...>`](#--cf-value) |                  | Sobrescribe una referencia (por ejemplo `ExampleRole.Arn=arn:...`)                     | Ninguno                          |
 | [`--show-env`](#--show-env)                  |                  | Muestra los valores de variables sin enmascarar en consola                             | `false` (enmascara secretos)     |
 | [`--debug`](#--debug)                        | `-d`             | Activa logs detallados del ciclo de vida con tiempos por etapa                         | `false`                          |
@@ -261,6 +263,14 @@ Activa el endpoint local de EventBridge Scheduler (una sola vez) e inyecta `AWS_
 freesls --scheduler --no-ssm
 ```
 
+#### `--cron`
+
+Ejecuta localmente los eventos `schedule` declarados en el template. Es independiente de `--scheduler`: `--scheduler` emula el API del Scheduler SDK, mientras que `--cron` ejecuta las reglas ya declaradas en `serverless.yml` o SAM. Usa ambos flags para probar los dos mecanismos a la vez.
+
+```bash
+freesls --cron --no-ssm
+```
+
 #### `--cf-value`
 
 Sobrescribe una referencia que FreeSLS no pueda derivar localmente, como `LogicalId.Atributo=valor` o `Outputs.OutputKey=valor`. Repetible y nunca consulta AWS.
@@ -322,6 +332,12 @@ freesls -s local --no-ssm
 # Scheduler local (los clientes SDK de la aplicación requieren credenciales de firma)
 freesls -s local --scheduler --no-ssm
 
+# Ejecutar localmente los eventos schedule declarados en serverless.yml o SAM
+freesls -s local --cron --no-ssm
+
+# Ejecutar schedules declarados y el endpoint del Scheduler SDK juntos
+freesls -s local --cron --scheduler --no-ssm
+
 # Sobrescribir un atributo que CloudFormation no devuelve directamente
 freesls --scheduler --no-ssm --cf-value ExampleRole.Arn=arn:aws:iam::123456789012:role/team/example
 
@@ -345,7 +361,7 @@ freesls -s dev --no-update-check
 
 ## Scheduler local
 
-`--scheduler` emula EventBridge **Scheduler** para schedules puntuales `at(...)`. No emula el bus de eventos (`PutEvents`) ni las reglas `schedule: cron(...)`.
+`--scheduler` emula EventBridge **Scheduler** para schedules puntuales `at(...)` creados por llamadas SDK. No emula el bus de eventos (`PutEvents`) ni schedules recurrentes `cron(...)`/`rate(...)` creados en runtime. Para ejecutar los eventos `schedule` declarados en el template, usa [`--cron`](#eventos-programados-cron--rate).
 
 **Operaciones:** `CreateSchedule`, `GetSchedule`, `UpdateSchedule`, `ListSchedules`, `DeleteSchedule` (solo grupo `default`).
 
@@ -489,13 +505,155 @@ El SDK de Scheduler firma cada petición, así que necesita credenciales de AWS.
 | Reintentos   | 0–185 intentos adicionales de entrega (185 por defecto), edad del evento 60–86400 segundos (86400 por defecto)                   |
 | Idempotencia | El mismo `ClientToken` y parámetros devuelve el ARN original; parámetros distintos generan conflicto; los tokens duran la sesión |
 
-Las opciones no soportadas devuelven errores compatibles con el SDK y una guía: `cron`, `rate`, ventanas flexibles, grupos personalizados, aliases/versiones, Lambdas externas, destinos universales, DLQ, KMS, StartDate/EndDate y placeholders de contexto Scheduler. Las horas inexistentes o ambiguas por cambios de horario se rechazan explícitamente: usa una fecha inequívoca o UTC. No se emula la notificación predeterminada de AWS cuando se omite Input.
+Las opciones no soportadas devuelven errores compatibles con el SDK y una guía: `cron`, `rate`, ventanas flexibles, grupos personalizados, aliases/versiones, Lambdas externas, destinos universales, DLQ, KMS, StartDate/EndDate y placeholders de contexto Scheduler. El API del Scheduler SDK sigue aceptando solo `at(...)`; los eventos declarados `cron(...)`/`rate(...)` se ejecutan localmente con `--cron`. Las horas inexistentes o ambiguas por cambios de horario se rechazan explícitamente: usa una fecha inequívoca o UTC. No se emula la notificación predeterminada de AWS cuando se omite Input.
 
 Los temporizadores apuntan al instante indicado, sin reproducir la ventana de precisión de 60 segundos de AWS. Las funciones se ejecutan secuencialmente junto a los handlers HTTP; los breakpoints o handlers que bloquean CPU pueden retrasarlas. Los reintentos corresponden a **aceptación de entrega**, no a errores del handler: la aceptación local tiene éxito para destinos registrados, por lo que las políticas de reintento se validan pero no repiten invocaciones. Se usa espera exponencial determinista (de 1 a 60 segundos), sin jitter AWS. Una invocación aceptada se ejecuta una vez: no se emula el servicio de reintentos/DLQ asíncronos de Lambda. Los errores muestran la identidad de la función sin contenido del error o payload; inspecciónalos con el depurador. Las programaciones se pierden al reiniciar, el apagado cancela futuras entregas y no garantiza drenar las invocaciones ya aceptadas.
 
-FreeSLS imprime una línea `[Lambda][start] <functionName>` (verde) en stdout para cada invocación, tanto HTTP como disparada por el Scheduler, y cada petición HTTP termina con una línea resumen `[Lambda][end] MÉTODO /ruta estado (ms)` (magenta), incluidos los errores. Con `--scheduler`, además imprime logs de ciclo de vida: cada schedule recibido (nombre, ARN del destino, hora de disparo en UTC más la zona declarada, estado, acción al finalizar y configuración de reintentos), cuándo se dispara y cuándo se entrega, cancela o expira. Nunca se registra `Target.Input` ni credenciales.
+FreeSLS imprime una línea `[Lambda][start] <functionName>` (verde) en stdout para cada invocación, tanto HTTP como programada, y cada petición HTTP termina con una línea resumen `[Lambda][end] MÉTODO /ruta estado (ms)` (magenta), incluidos los errores. Con `--scheduler`, además imprime logs de ciclo de vida: cada schedule recibido (nombre, ARN del destino, hora de disparo en UTC más la zona declarada, estado, acción al finalizar y configuración de reintentos), cuándo se dispara y cuándo se entrega, cancela o expira. Con `--cron`, imprime las reglas registradas, su próxima ejecución y cada disparo/entrega/fallo. Nunca se registra `Target.Input`, el `input` de un schedule ni credenciales.
 
-### Resolver referencias a recursos
+## Eventos programados (cron / rate)
+
+`--cron` ejecuta localmente los eventos `schedule` declarados en el template. Es distinto de `--scheduler`:
+
+| Mecanismo                                 | Declaración                                    | Flag local    |
+| ----------------------------------------- | ---------------------------------------------- | ------------- |
+| Regla EventBridge / schedule de Scheduler | `events: - schedule: cron(...)` en el template | `--cron`      |
+| API del Scheduler SDK                     | `CreateScheduleCommand` en runtime             | `--scheduler` |
+
+Ambos flags se pueden usar juntos. `--cron` lee el template una vez al arrancar; `--scheduler` mantiene en memoria el API para los schedules que cree tu código después.
+
+### Serverless Framework
+
+```yaml
+functions:
+  scheduled-notification:
+    handler: src/functions/scheduled-notification/handler.scheduledNotificationHandler
+    events:
+      - schedule: cron(*/5 * * * ? *)
+```
+
+La forma objeto admite varias expresiones y campos opcionales:
+
+```yaml
+events:
+  - schedule:
+      cron:
+        - cron(*/5 * * * ? *)
+        - cron(0 12 ? * MON-FRI *)
+      enabled: true
+      input:
+        stage: ${sls:stage}
+  - schedule:
+      cron: cron(0 12 ? * MON-FRI *)
+      method: scheduler
+      timezone: America/Bogota
+```
+
+- `cron`/`rate` aceptan un string o un array de strings.
+- `method: eventBus` (por defecto) evalúa en **UTC**.
+- `method: scheduler` acepta `timezone` con un nombre IANA y sigue el comportamiento DST de Scheduler.
+- `enabled: false` registra la regla pero no la ejecuta.
+- `input` reemplaza el evento programado por defecto.
+- `inputPath` e `inputTransformer` no se soportan localmente.
+
+### AWS SAM
+
+```yaml
+Resources:
+  Worker:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handler.worker
+      Runtime: nodejs20.x
+      Events:
+        EveryFiveMinutes:
+          Type: Schedule
+          Properties:
+            Schedule: cron(*/5 * * * ? *)
+        DailyBogota:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(0 12 ? * MON-FRI *)
+            ScheduleExpressionTimezone: America/Bogota
+```
+
+`Schedule` usa semántica de regla EventBridge (UTC). `ScheduleV2` usa semántica de Scheduler y acepta `ScheduleExpressionTimezone`, `State`, `Input`, `Name` y `Description`. `StartDate`, `EndDate`, `RetryPolicy`, `DeadLetterConfig`, `GroupName` personalizado y `FlexibleTimeWindow: FLEXIBLE` se rechazan localmente con un error accionable.
+
+### Ejecutar y observar
+
+```bash
+freesls -s dev --cron --no-ssm
+```
+
+```text
+⏰ Registered Schedules: (1)
+
+  ENABLED  scheduled-notification → scheduled-notification
+     ├─ expression: cron(*/5 * * * ? *) (UTC)
+     ├─ method:     eventBus
+     └─ next:       2026-10-26T15:05:00.000Z (UTC)
+
+...
+
+⏰ [Schedule] Firing scheduled-notification → scheduled-notification
+🐱 [Lambda][start] scheduled-notification
+...
+```
+
+El handler recibe la misma forma de evento programado que en AWS (o tu `input`):
+
+```json
+{
+  "version": "0",
+  "id": "7f9c...",
+  "detail-type": "Scheduled Event",
+  "source": "aws.events",
+  "account": "123456789012",
+  "time": "2026-10-26T15:05:00.000Z",
+  "region": "us-east-1",
+  "resources": ["arn:aws:events:us-east-1:123456789012:rule/scheduled-notification-schedule-1"],
+  "detail": {}
+}
+```
+
+### Variables declarativas
+
+Las expresiones y el input pasan por el resolver normal:
+
+```yaml
+custom:
+  notificationsCron: cron(*/5 * * * ? *)
+  notificationsTable: campaigns-${sls:stage}
+
+functions:
+  scheduled-notification:
+    handler: src/functions/scheduled-notification/handler.scheduledNotificationHandler
+    events:
+      - schedule:
+          cron: ${self:custom.notificationsCron}
+          enabled: ${param:cronEnabled, 'true'}
+          input:
+            stage: ${sls:stage}
+            table: ${self:custom.notificationsTable}
+            secret: ${ssm:/my-service/secret}
+```
+
+Se admiten `${self:...}`, `${sls:stage}`, `${opt:...}`, `${param:...}`, `${env:...}`, `${aws:...}`, `${ssm:...}`, cadenas de fallback, `!Sub`, `!Ref`, `!GetAtt` y pseudo-parámetros. La resolución ocurre una vez al arrancar; reinicia para aplicar cambios.
+
+### Límites
+
+- Cron usa la sintaxis AWS de seis campos. El cron Unix de cinco campos (por ejemplo `0 12 * * 0-5`) se rechaza con una guía.
+- Los schedules declarados aceptan `cron(...)` y `rate(...)`. El `at(...)` puntual está disponible con `--scheduler`.
+- Se admiten `L`, `W`, `LW`, `#`, nombres de mes/día y años 1970–2199.
+- `rate(...)` usa unidad singular para `1` y plural para valores mayores que `1` (`rate(1 hour)`, `rate(5 hours)`).
+- Las reglas `eventBus` evalúan en UTC. Usa `method: scheduler`/`ScheduleV2` para una zona IANA.
+- La primera ejecución de `rate(...)` ocurre tras un intervalo; cron empieza en el siguiente minuto coincidente. Las ejecuciones perdidas se omiten, nunca se repiten.
+- Las reglas viven en memoria. Al reiniciar se pierden; al apagar se cancelan los timers pendientes.
+- Sin autorización IAM, reintentos, DLQ, KMS/cifrado, métricas de CloudWatch ni despliegue en AWS. `iamRoleStatements` es configuración de despliegue y no se evalúa localmente.
+- No se escanean recursos crudos `AWS::Events::Rule` ni `AWS::Scheduler::Schedule`; declara el schedule dentro de la función.
+- Los handlers pasan por la misma cola que HTTP y las invocaciones del Scheduler, así que un handler lento retrasa a los demás. Nunca se registran payloads ni credenciales.
+
+## Resolver referencias a recursos
 
 FreeSLS resuelve `Ref`, `Fn::GetAtt` y `Fn::Sub` en local: Lambdas registradas y roles IAM declarados en tu plantilla. Ejemplo:
 
@@ -519,7 +677,7 @@ Los IDs lógicos generados de Serverless convierten `-` en `Dash` y `_` en `Unde
 
 En SAM, el nombre local del servicio proviene de `Description` de la plantilla (normalizado y limitado a 30 caracteres), o del nombre de la carpeta del proyecto si no existe. Los nombres de Lambda autogenerados que superan 64 caracteres o contienen caracteres inválidos se normalizan y reciben un sufijo hash estable dentro del límite de 64 caracteres. Los valores explícitos de `FunctionName` se validan sin reescribirlos. `Ref`, `GetAtt` y `Sub` utilizan la misma identidad local. Estos nombres internos no se añaden a las rutas HTTP; solo `--base-path` / `--prefix` añade un prefijo a la URL.
 
-#### Cuando una referencia no se puede resolver: `--cf-value`
+### Cuando una referencia no se puede resolver: `--cf-value`
 
 Si una referencia apunta a algo **no** declarado en tu plantilla (por ejemplo un rol de otro stack), FreeSLS se detiene con un error accionable. Da el valor a mano:
 
@@ -677,13 +835,32 @@ functions:
           method: ANY
 ```
 
-### 2. Formato de Handlers
+### 2. Eventos Programados
+
+`--cron` ejecuta localmente los schedules declarados:
+
+```yaml
+functions:
+  scheduled-notification:
+    handler: src/handlers/notification.scheduled
+    events:
+      - schedule: cron(*/5 * * * ? *)
+      - schedule:
+          cron: cron(0 12 ? * MON-FRI *)
+          enabled: false
+          input:
+            stage: ${sls:stage}
+```
+
+Ver [Eventos programados](#eventos-programados-cron--rate) para los campos y límites soportados.
+
+### 3. Formato de Handlers
 
 FreeSLS ubica automáticamente handlers en:
 
 - `src/handlers/user.get` $\rightarrow$ Busca `src/handlers/user.ts`, `src/handlers/user.js` o `src/handlers/user/index.ts` y extrae la función nombrada `get` (o `default`).
 
-### 3. Resolución de Variables y Fallbacks
+### 4. Resolución de Variables y Fallbacks
 
 ```yaml
 provider:

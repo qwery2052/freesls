@@ -7,8 +7,15 @@ import {
   type RouteDefinition,
   type LoadResult,
   type FunctionDefinition,
+  type ScheduleDefinition,
+  type ScheduleTriggerMethod,
   DEFAULT_OFFLINE_ENV,
 } from "./types.js";
+import {
+  boundedScheduleName,
+  parseRecurringExpression,
+  validateScheduleName,
+} from "./schedule-expression.js";
 import { SSMResolver } from "./ssm.js";
 import {
   extractSSMPaths,
@@ -75,6 +82,7 @@ export interface ParserOptions {
   params: Record<string, string>;
   resolveSSM?: boolean;
   scheduler?: boolean;
+  cron?: boolean;
   cfValues?: Record<string, string>;
   envOverrides?: Record<string, string>;
 }
@@ -281,6 +289,292 @@ function extractRoutes(
   return routeDefinitions;
 }
 
+const SUPPORTED_SCHEDULE_FIELDS = [
+  "rate",
+  "cron",
+  "enabled",
+  "input",
+  "inputPath",
+  "inputTransformer",
+  "name",
+  "description",
+  "method",
+  "timezone",
+];
+
+/** Resolve Ref/GetAtt/Sub inside schedule input without re-expanding fetched SSM data. */
+function resolveScheduleData(
+  value: unknown,
+  context: ResolveContext | undefined,
+  field: string,
+): unknown {
+  if (Array.isArray(value))
+    return value.map((item, index) => resolveScheduleData(item, context, `${field}[${index}]`));
+  if (!value || typeof value !== "object") return value;
+
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  const intrinsicKey = keys.find(key => key === "Ref" || key.startsWith("Fn::"));
+  if (intrinsicKey !== undefined) {
+    if (keys.length !== 1) {
+      throw new Error(
+        `Unsupported intrinsic object in ${field}. Use one Ref/GetAtt/Sub value or literal data.`,
+      );
+    }
+    if (intrinsicKey === "Ref" || intrinsicKey === "Fn::GetAtt") {
+      const resolved = resolveIntrinsicReference(record, context);
+      if (resolved !== null) return resolved;
+      throw new Error(
+        `Cannot resolve ${intrinsicKey} in ${field}. Declare a local resource, provide --cf-value LogicalId.Attribute=value, or use a literal value.`,
+      );
+    }
+    if (intrinsicKey === "Fn::Sub") {
+      const resolved = resolveCloudFormationSub(record["Fn::Sub"], context);
+      if (resolved !== null) return resolved;
+      throw new Error(
+        `Cannot resolve Fn::Sub in ${field}. Use supported local references or a literal value.`,
+      );
+    }
+    throw new Error(
+      `Unsupported intrinsic ${intrinsicKey} in ${field}. Use literal values, Ref, GetAtt or Sub.`,
+    );
+  }
+
+  return Object.fromEntries(
+    keys.map(key => [key, resolveScheduleData(record[key], context, `${field}.${key}`)]),
+  );
+}
+
+function scheduleScalar(
+  value: unknown,
+  context: ResolveContext | undefined,
+  field: string,
+): string {
+  const resolved = resolveScheduleData(value, context, field);
+  if (typeof resolved === "string") return resolved.trim();
+  if (typeof resolved === "number" || typeof resolved === "boolean") return String(resolved);
+  throw new Error(`${field} must resolve to a string.`);
+}
+
+function scheduleBoolean(
+  value: unknown,
+  context: ResolveContext | undefined,
+  field: string,
+): boolean {
+  if (value === undefined) return true;
+  const resolved = resolveScheduleData(value, context, field);
+  if (typeof resolved === "boolean") return resolved;
+  if (resolved === "true") return true;
+  if (resolved === "false") return false;
+  throw new Error(`${field} must be true or false.`);
+}
+
+function parseScheduleMethod(
+  value: unknown,
+  context: ResolveContext | undefined,
+  field: string,
+): ScheduleTriggerMethod {
+  if (value === undefined) return "eventBus";
+  const resolved = scheduleScalar(value, context, field);
+  if (resolved === "eventBus" || resolved === "scheduler") return resolved;
+  throw new Error(`${field} accepts eventBus or scheduler.`);
+}
+
+function parseScheduleInput(
+  value: unknown,
+  context: ResolveContext | undefined,
+  field: string,
+): unknown {
+  const resolved = resolveScheduleData(value, context, field);
+  if (resolved === null || resolved === undefined) return undefined;
+  if (typeof resolved !== "string") return resolved;
+  try {
+    return JSON.parse(resolved);
+  } catch {
+    throw new Error(`${field} must be valid JSON text.`);
+  }
+}
+
+interface ParsedServerlessSchedule {
+  expressions: string[];
+  enabled: boolean;
+  method: ScheduleTriggerMethod;
+  timezone: string;
+  input?: unknown;
+  name?: string;
+  description?: string;
+}
+
+function parseServerlessSchedule(
+  rawSchedule: unknown,
+  functionName: string,
+  context?: ResolveContext,
+): ParsedServerlessSchedule {
+  const fieldPrefix = `Schedule for function ${functionName}`;
+  let expressionSource: unknown;
+  let config: Record<string, unknown> = {};
+
+  if (typeof rawSchedule === "string") {
+    expressionSource = rawSchedule;
+  } else if (rawSchedule && typeof rawSchedule === "object" && !Array.isArray(rawSchedule)) {
+    config = rawSchedule as Record<string, unknown>;
+    for (const key of Object.keys(config)) {
+      if (!SUPPORTED_SCHEDULE_FIELDS.includes(key)) {
+        throw new Error(
+          `${fieldPrefix} uses unsupported option ${key}. Supported options: ${SUPPORTED_SCHEDULE_FIELDS.join(", ")}.`,
+        );
+      }
+    }
+    if (config.inputPath !== undefined) {
+      throw new Error(
+        `${fieldPrefix} does not support inputPath locally. Use input with an explicit JSON value.`,
+      );
+    }
+    if (config.inputTransformer !== undefined) {
+      throw new Error(
+        `${fieldPrefix} does not support inputTransformer locally. Use input with an explicit JSON value.`,
+      );
+    }
+    const hasCron = config.cron !== undefined;
+    const hasRate = config.rate !== undefined;
+    if (hasCron && hasRate) {
+      throw new Error(`${fieldPrefix} must use either cron or rate, not both.`);
+    }
+    expressionSource = hasCron ? config.cron : config.rate;
+    if (expressionSource === undefined) {
+      throw new Error(`${fieldPrefix} requires a cron or rate expression.`);
+    }
+  } else {
+    throw new Error(
+      `${fieldPrefix} must be a cron(...)/rate(...) string or an object with cron or rate.`,
+    );
+  }
+
+  const expressionValues = Array.isArray(expressionSource) ? expressionSource : [expressionSource];
+  if (expressionValues.length === 0) {
+    throw new Error(`${fieldPrefix} requires at least one expression.`);
+  }
+  const expressions = expressionValues.map((value, index) =>
+    scheduleScalar(value, context, `${fieldPrefix} expression ${index + 1}`),
+  );
+
+  const method = parseScheduleMethod(config.method, context, `${fieldPrefix} method`);
+  const configuredTimezone =
+    config.timezone === undefined
+      ? "UTC"
+      : scheduleScalar(config.timezone, context, `${fieldPrefix} timezone`);
+  if (method === "eventBus" && configuredTimezone !== "UTC") {
+    throw new Error(
+      `${fieldPrefix} uses method eventBus, which evaluates in UTC. Use method scheduler to set a timezone.`,
+    );
+  }
+  const timezone = method === "eventBus" ? "UTC" : configuredTimezone;
+  const enabled = scheduleBoolean(config.enabled, context, `${fieldPrefix} enabled`);
+  const name =
+    config.name === undefined
+      ? undefined
+      : validateScheduleName(
+          scheduleScalar(config.name, context, `${fieldPrefix} name`),
+          `Schedule name for function ${functionName}`,
+        );
+  const description =
+    config.description === undefined
+      ? undefined
+      : scheduleScalar(config.description, context, `${fieldPrefix} description`);
+  if (description !== undefined && description.length > 512) {
+    throw new Error(`${fieldPrefix} description must be at most 512 characters.`);
+  }
+  const input =
+    config.input === undefined || config.input === null
+      ? undefined
+      : parseScheduleInput(config.input, context, `${fieldPrefix} input`);
+
+  return { expressions, enabled, method, timezone, input, name, description };
+}
+
+function extractSchedules(
+  functionsConfig: Record<string, any> = {},
+  functionsByName: Map<string, FunctionDefinition>,
+  options: ParserOptions,
+  context?: ResolveContext,
+): ScheduleDefinition[] {
+  const schedules: ScheduleDefinition[] = [];
+  const seenNames = new Map<string, string>();
+  const partition = awsPartition(options.region);
+  const account = context?.references?.get("AWS::AccountId") || "123456789012";
+  let scheduleIndex = 0;
+
+  for (const [functionName, functionConfig] of Object.entries(functionsConfig)) {
+    if (!Array.isArray(functionConfig?.events)) continue;
+    const functionDefinition = functionsByName.get(functionName);
+    if (!functionDefinition) continue;
+    const lambdaName = functionDefinition.arn?.split(":function:")[1] || functionName;
+
+    for (const eventConfig of functionConfig.events) {
+      if (!eventConfig || typeof eventConfig !== "object" || eventConfig.schedule === undefined) {
+        continue;
+      }
+      const parsed = parseServerlessSchedule(eventConfig.schedule, functionName, context);
+
+      for (
+        let expressionIndex = 0;
+        expressionIndex < parsed.expressions.length;
+        expressionIndex++
+      ) {
+        scheduleIndex++;
+        const expression = parsed.expressions[expressionIndex];
+        try {
+          parseRecurringExpression(expression, parsed.timezone);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(`Invalid schedule for function ${functionName}: ${message}`);
+        }
+
+        const scheduleName =
+          parsed.name === undefined
+            ? validateScheduleName(
+                boundedScheduleName(`${lambdaName}-schedule-${scheduleIndex}`),
+                `Generated schedule name for function ${functionName}`,
+              )
+            : validateScheduleName(
+                parsed.expressions.length > 1
+                  ? `${parsed.name}-${expressionIndex + 1}`
+                  : parsed.name,
+                `Schedule name for function ${functionName}`,
+              );
+
+        const nameKey = `${parsed.method}:${scheduleName}`;
+        const previousFunction = seenNames.get(nameKey);
+        if (previousFunction !== undefined) {
+          throw new Error(
+            `Duplicate ${parsed.method} schedule name ${scheduleName} in functions ${previousFunction} and ${functionName}. Use a unique name per method.`,
+          );
+        }
+        seenNames.set(nameKey, functionName);
+
+        schedules.push({
+          ...functionDefinition,
+          scheduleName,
+          expression,
+          enabled: parsed.enabled,
+          method: parsed.method,
+          timezone: parsed.timezone,
+          description: parsed.description,
+          input: parsed.input,
+          ruleArn:
+            parsed.method === "scheduler"
+              ? `arn:${partition}:scheduler:${options.region}:${account}:schedule/default/${scheduleName}`
+              : `arn:${partition}:events:${options.region}:${account}:rule/${scheduleName}`,
+          region: options.region,
+          account,
+        });
+      }
+    }
+  }
+
+  return schedules;
+}
+
 export async function loadServerlessConfig(
   workingDirectory = process.cwd(),
   options: ParserOptions,
@@ -414,10 +708,16 @@ export async function loadServerlessConfig(
   for (const route of routeDefinitions) Object.assign(route.environment, options.envOverrides);
   for (const fn of functions) Object.assign(fn.environment, options.envOverrides);
 
+  const functionsByName = new Map(functions.map(fn => [fn.functionName, fn]));
+  const schedules = options.cron
+    ? extractSchedules(finalConfig.functions, functionsByName, options, context)
+    : [];
+
   return {
     config: finalConfig,
     routes: routeDefinitions,
     functions,
+    schedules,
     globalEnv: globalEnvironment,
     framework: "serverless",
   };
