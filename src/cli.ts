@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import fs from "node:fs";
+import path from "node:path";
 import { Command } from "commander";
 import pc from "picocolors";
 import { loadServerlessConfig } from "./parser.js";
@@ -11,6 +13,7 @@ import {
   printSchedulerEvent,
   printSchedules,
   printScheduleEvent,
+  printMakefileNotice,
   printLambdaStart,
   printSsmResolutionError,
   printUpdateNotice,
@@ -18,11 +21,12 @@ import {
 import { startServer, createLambdaExecutor } from "./server.js";
 import { LocalScheduler, startScheduler } from "./scheduler.js";
 import { LocalScheduleRunner } from "./schedule-runner.js";
+import { resolveGnuMakeCommand } from "./sam-makefile.js";
 import { SSMParameterNotFoundError } from "./ssm.js";
 import { DEFAULT_OFFLINE_ENV } from "./types.js";
 import { checkForUpdate, isUpdateCheckDisabled } from "./update-check.js";
 
-const VERSION = "0.6.0-beta.0";
+const VERSION = "0.7.0-beta.0";
 
 const program = new Command();
 
@@ -65,6 +69,7 @@ program
   .option("--no-ssm", "Disable AWS SSM queries and use local fallbacks or mocks")
   .option("--scheduler", "Enable the local one-time Lambda Scheduler endpoint")
   .option("--cron", "Run declared schedule events locally (cron/rate)")
+  .option("--makefile", "Resolve SAM makefile handlers with GNU Make (requires --sam)")
   .option(
     "--cf-value <values...>",
     "Explicit reference values: LogicalId.Attribute=value or Outputs.Key=value",
@@ -109,6 +114,18 @@ program
 
       const isSamMode = Boolean(commandOptions.sam);
       const frameworkDisplayName = isSamMode ? "AWS SAM" : "Serverless Framework";
+      let makeCommand: string | undefined;
+
+      if (commandOptions.makefile) {
+        if (!isSamMode) throw new Error("--makefile requires --sam.");
+        const makefilePath = path.resolve(process.cwd(), "Makefile");
+        if (!fs.existsSync(makefilePath) || !fs.statSync(makefilePath).isFile()) {
+          throw new Error(
+            `--makefile requires a Makefile at ${makefilePath}. Remove --makefile or place the Makefile at the project root.`,
+          );
+        }
+        makeCommand = resolveGnuMakeCommand().command;
+      }
 
       if (process.stdout.isTTY) {
         console.clear();
@@ -127,6 +144,8 @@ program
         resolveSSM: commandOptions.ssm !== false,
         scheduler: Boolean(commandOptions.scheduler),
         cron: Boolean(commandOptions.cron),
+        makefile: Boolean(commandOptions.makefile),
+        makeCommand,
         cfValues: commandOptions.cfValue
           ? parseCliParameters(commandOptions.cfValue, "--cf-value")
           : undefined,
@@ -138,6 +157,7 @@ program
         routes,
         functions = [],
         schedules = [],
+        makefileHandlers = [],
         globalEnv,
         framework,
       } = isSamMode
@@ -153,6 +173,9 @@ program
         Boolean(commandOptions.debug),
       );
       printEnvironmentSummary(globalEnv, Boolean(commandOptions.showEnv));
+      if (commandOptions.makefile) {
+        printMakefileNotice(makefileHandlers, Boolean(commandOptions.debug));
+      }
       printRoutes(routes, serverPort, basePath, Boolean(commandOptions.scheduler));
       if (commandOptions.cron) {
         printSchedules(schedules, Boolean(commandOptions.scheduler || commandOptions.debug));

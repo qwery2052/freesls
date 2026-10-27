@@ -55,11 +55,18 @@ export interface ScheduleDefinition extends FunctionDefinition {
   account: string;
 }
 
+export interface MakefileHandlerDefinition {
+  functionName: string;
+  sourceFile: string;
+  handler: string;
+}
+
 export interface LoadResult {
   config: ServerlessConfig;
   routes: RouteDefinition[];
   functions?: FunctionDefinition[];
   schedules?: ScheduleDefinition[];
+  makefileHandlers?: MakefileHandlerDefinition[];
   globalEnv: Record<string, string>;
   framework?: "serverless" | "sam";
 }

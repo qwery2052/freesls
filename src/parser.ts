@@ -83,6 +83,8 @@ export interface ParserOptions {
   resolveSSM?: boolean;
   scheduler?: boolean;
   cron?: boolean;
+  makefile?: boolean;
+  makeCommand?: string;
   cfValues?: Record<string, string>;
   envOverrides?: Record<string, string>;
 }

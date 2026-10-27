@@ -21,7 +21,7 @@
 </p>
 
 ```
-   /\_/\   FreeSLS v0.6.0-beta.0  [SLS] / [AWS SAM]
+   /\_/\   FreeSLS v0.7.0-beta.0  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
    > ^ <   ● Service: example-service [stage: dev]
 ────────────────────────────────────────────────────────────
@@ -37,16 +37,17 @@
 > - ⚡ **Current Scope:** FreeSLS currently focuses on **AWS Lambda functions invoked via HTTP and HTTP API events (API Gateway)** and **scheduled EventBridge rules** declared in templates, for both **Serverless Framework** (`serverless.yml`) and **AWS SAM** (`template.yaml` / `template.yml`). Support for additional triggers (such as SQS, SNS and S3) is planned for upcoming releases. Feedback and suggestions are warmly welcomed!
 
 > [!IMPORTANT]
-> **🧪 Beta Release `v0.6.0-beta.0`**
+> **🧪 Beta Release `v0.7.0-beta.0`**
 >
-> This pre-release focuses on upcoming `0.6.0` work. Changes currently under validation:
+> This pre-release focuses on upcoming `0.7.0` work. Changes currently under validation:
 >
 > - `--cron` to run declared `schedule` events locally with AWS cron/rate semantics.
 > - Six-field cron expressions with `L`, `W`, `#`, time zones and DST handling.
 > - SAM `Schedule`/`ScheduleV2` and Serverless `eventBus`/`scheduler` methods.
 > - `--cron` and `--scheduler` can be combined.
+> - `--makefile` for SAM functions built by a root `Makefile`, resolving source handlers with GNU Make while preserving breakpoints.
 >
-> Feedback on these changes is especially valuable before the stable `0.6.0` release.
+> Feedback on these changes is especially valuable before the stable `0.7.0` release.
 
 ---
 
@@ -155,6 +156,7 @@ Or add a script to your `package.json`:
 | [`--no-ssm`](#--no-ssm)                    |                  | Disables AWS SSM queries (uses `ssm.env`, YAML fallbacks, or mocks)               | `false` (queries real AWS SSM)   |
 | [`--scheduler`](#--scheduler)              |                  | Enable the local one-time Lambda Scheduler endpoint                               | `false`                          |
 | [`--cron`](#--cron)                        |                  | Run declared `schedule` events locally (cron/rate)                                | `false`                          |
+| [`--makefile`](#--makefile)                |                  | Resolve SAM makefile handlers with GNU Make (requires `--sam`)                    | `false`                          |
 | [`--cf-value <key=value...>`](#--cf-value) |                  | Override a reference (for example `ExampleRole.Arn=arn:...`)                      | None                             |
 | [`--show-env`](#--show-env)                |                  | Displays full, unmasked environment variables in console                          | `false` (masks sensitive values) |
 | [`--debug`](#--debug)                      | `-d`             | Enables verbose lifecycle debug logging with stage timings                        | `false`                          |
@@ -271,6 +273,14 @@ Run the `schedule` events declared in the template locally. It is independent fr
 freesls --cron --no-ssm
 ```
 
+#### `--makefile`
+
+For SAM functions declaring `Metadata.BuildMethod: makefile`, resolve the original source handler with GNU Make and execute the TypeScript source locally. This keeps breakpoints working. It requires `--sam`, a `Makefile` at the project root, and GNU Make on `PATH`; it does not run `sam build`.
+
+```bash
+freesls --sam --makefile --cron --no-ssm
+```
+
 #### `--cf-value`
 
 Override a reference FreeSLS cannot derive locally, as `LogicalId.Attribute=value` or `Outputs.OutputKey=value`. Repeatable and never queries AWS.
@@ -337,6 +347,9 @@ freesls -s local --cron --no-ssm
 
 # Run declared schedules and the Scheduler SDK endpoint together
 freesls -s local --cron --scheduler --no-ssm
+
+# Resolve SAM makefile source handlers with GNU Make (keeps breakpoints)
+freesls --sam -s local --makefile --cron --no-ssm
 
 # Override an attribute that CloudFormation cannot return directly
 freesls --scheduler --no-ssm --cf-value ExampleRole.Arn=arn:aws:iam::123456789012:role/team/example
@@ -652,6 +665,55 @@ functions:
 - No IAM authorization, retries, DLQ, KMS/encryption, CloudWatch metrics or AWS deployment. `iamRoleStatements` are deployment configuration and are not evaluated locally.
 - Raw `AWS::Events::Rule` or `AWS::Scheduler::Schedule` resources are not scanned; declare the schedule inside the function.
 - Handlers execute through the same queue as HTTP and Scheduler invocations, so a long handler delays other invocations. Payloads and credentials are never logged.
+
+## SAM makefile builds
+
+`--makefile` is for SAM functions that declare:
+
+```yaml
+Metadata:
+  BuildMethod: makefile
+```
+
+It requires `--sam`, a `Makefile` at the project root, and GNU Make on `PATH`:
+
+```bash
+freesls --sam --makefile --cron --no-ssm
+```
+
+For every makefile-backed function, FreeSLS runs:
+
+```bash
+make -B -n build-<LogicalId>
+```
+
+with `ARTIFACTS_DIR=.aws-sam/build/<LogicalId>`. `make -n` prints the build commands without executing the Makefile recipes, so it does not run `sam build`, `pnpm install` or `esbuild`.
+
+From the printed command, FreeSLS extracts the original source file:
+
+```text
+corepack pnpm exec esbuild src/functions/send-appointment-reminders/handler.ts ...
+                                 └─ resolved source handler
+```
+
+and executes that source with Jiti. This is intentional: **breakpoints and source debugging keep working**. The built artifact is not used in this mode.
+
+```text
+⚠️  SAM makefile mode
+   Source handlers resolved with GNU Make (`make -n`); `sam build` was not executed.
+   • SendAppointmentRemindersFunction → src/functions/send-appointment-reminders/handler.ts
+   Breakpoints use the source files. Restart FreeSLS if the Makefile changes.
+```
+
+Notes:
+
+- There is no `--makefile <path>` option. The `Makefile` must be at the project root, matching SAM's `CodeUri: .` convention.
+- `--makefile` only affects functions with `Metadata.BuildMethod: makefile`; other SAM and Serverless functions are unchanged.
+- The Makefile target must be named `build-<LogicalId>` and the printed command must expose the source path (for example an `esbuild ... src/.../handler.ts` command).
+- `make -n` can still evaluate `$(shell ...)` functions. Avoid Makefiles with side effects in variable expansion.
+- Source code generation is not supported: `make -n` does not generate files. Run the generator separately if your Makefile needs one.
+- On Windows, install GNU Make (for example `choco install make` or `scoop install make`); `mingw32-make` is accepted as a fallback. `nmake` is not compatible.
+- If the Makefile changes, restart FreeSLS so the source paths are resolved again.
 
 ## Resolving resource references
 

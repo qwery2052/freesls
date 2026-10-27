@@ -5,10 +5,12 @@ import {
   type RouteDefinition,
   type FunctionDefinition,
   type ScheduleDefinition,
+  type MakefileHandlerDefinition,
   type LoadResult,
   DEFAULT_OFFLINE_ENV,
 } from "./types.js";
 import { parseYaml, resolveSSMValues, type ParserOptions } from "./parser.js";
+import { resolveGnuMakeCommand, resolveMakefileHandler } from "./sam-makefile.js";
 import {
   boundedScheduleName,
   parseRecurringExpression,
@@ -930,8 +932,21 @@ export async function loadSamConfig(
   const routeDefinitions: RouteDefinition[] = [];
   const functions: FunctionDefinition[] = [];
   const scheduleDefinitions: ScheduleDefinition[] = [];
+  const makefileHandlers: MakefileHandlerDefinition[] = [];
   const arns = new Set<string>();
   const resources = finalConfig.Resources || {};
+  const makeCommand = options.makefile
+    ? (options.makeCommand ?? resolveGnuMakeCommand().command)
+    : undefined;
+
+  if (options.makefile) {
+    const makefilePath = path.join(workingDirectory, "Makefile");
+    if (!fs.existsSync(makefilePath) || !fs.statSync(makefilePath).isFile()) {
+      throw new Error(
+        `--makefile requires a Makefile at ${makefilePath}. Remove --makefile or place the Makefile at the project root.`,
+      );
+    }
+  }
 
   for (const [resourceName, resourceConfig] of Object.entries(resources)) {
     const resourceType = resourceConfig?.Type;
@@ -952,7 +967,25 @@ export async function loadSamConfig(
     // Explicit CLI environment overrides win over global and function environments.
     Object.assign(functionEnv, options.envOverrides);
 
-    const handler = resolveSamHandler(resourceName, properties, resourceConfig.Metadata);
+    let handler = resolveSamHandler(resourceName, properties, resourceConfig.Metadata);
+    if (
+      resourceType === "AWS::Serverless::Function" &&
+      options.makefile &&
+      resourceConfig.Metadata?.BuildMethod?.toLowerCase() === "makefile"
+    ) {
+      const resolved = resolveMakefileHandler({
+        workingDirectory,
+        logicalId: resourceName,
+        handler,
+        makeCommand: makeCommand!,
+      });
+      handler = resolved.handler;
+      makefileHandlers.push({
+        functionName: resourceName,
+        sourceFile: resolved.sourceFile,
+        handler,
+      });
+    }
     const functionRoutes = extractSamFunctionRoutes(resourceName, properties, functionEnv, handler);
     const name = resolveCloudFormationRef(resourceName, { ...fullSamOptions, parameters });
     if (typeof name !== "string" || !/^[\w-]{1,64}$/.test(name))
@@ -1014,6 +1047,7 @@ export async function loadSamConfig(
     routes: routeDefinitions,
     functions,
     schedules: scheduleDefinitions,
+    makefileHandlers,
     globalEnv: globalEnvironment,
     framework: "sam",
   };

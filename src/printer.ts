@@ -1,5 +1,5 @@
 import pc from "picocolors";
-import type { RouteDefinition, ScheduleDefinition } from "./types.js";
+import type { MakefileHandlerDefinition, RouteDefinition, ScheduleDefinition } from "./types.js";
 import type { SchedulerEvent } from "./scheduler.js";
 import type { ScheduleRunEvent } from "./schedule-runner.js";
 import { nextCronInstant, parseRecurringExpression } from "./schedule-expression.js";
@@ -80,7 +80,7 @@ export function printBanner(
   const shinyBadge = shiny ? `  ${pc.bold(pc.bgYellow(pc.black(" ✨ SHINY ")))}` : "";
 
   const bannerArt = `
-   ${pc[colors[0]]("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.6.0-beta.0")}  ${frameworkBadge}${debugBadge}${shinyBadge}
+   ${pc[colors[0]]("/\\_/\\")}   ${pc.bold(pc.cyan("FreeSLS"))} ${pc.dim("v0.7.0-beta.0")}  ${frameworkBadge}${debugBadge}${shinyBadge}
   ${pc[colors[1]]("( o.o )")}  ${pc.dim("Offline API Gateway & Lambda Runner")}
    ${pc[colors[2]]("> ^ <")}   ${pc.green("●")} Service: ${pc.bold(serviceName)} ${pc.dim(`[stage: ${stage}]`)}
   `;
@@ -184,6 +184,42 @@ export function printEnvironmentSummary(
   }
 
   console.log();
+}
+
+/**
+ * Explain that SAM makefile functions execute source handlers resolved with
+ * `make -n`. Never includes credentials or request payloads.
+ */
+export function printMakefileNotice(handlers: MakefileHandlerDefinition[], debug = false) {
+  console.log(pc.dim("─".repeat(60)));
+
+  if (handlers.length === 0) {
+    console.log(
+      `\n ${pc.yellow("⚠️  --makefile was enabled, but no functions declare Metadata.BuildMethod: makefile.")}\n`,
+    );
+    return;
+  }
+
+  console.log(`\n ${pc.yellow("⚠️  SAM makefile mode")}`);
+  console.log(
+    `   ${pc.dim("Source handlers resolved with GNU Make (`make -n`); `sam build` was not executed.")}`,
+  );
+
+  const visible = debug ? handlers : handlers.slice(0, 3);
+  for (const entry of visible) {
+    console.log(
+      `   ${pc.magenta("•")} ${pc.bold(entry.functionName)} → ${pc.cyan(entry.sourceFile)}`,
+    );
+  }
+  if (!debug && handlers.length > visible.length) {
+    console.log(
+      `   ${pc.dim(`... and ${handlers.length - visible.length} more. Run with --debug for all paths.`)}`,
+    );
+  }
+
+  console.log(
+    `   ${pc.dim("Breakpoints use the source files. Restart FreeSLS if the Makefile changes.")}\n`,
+  );
 }
 
 export function printRoutes(
