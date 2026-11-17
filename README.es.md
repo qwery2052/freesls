@@ -21,7 +21,7 @@
 </p>
 
 ```
-   /\_/\   FreeSLS v0.7.0-beta.0  [SLS] / [AWS SAM]
+   /\_/\   FreeSLS v0.7.0  [SLS] / [AWS SAM]
   ( o.o )  Offline API Gateway & Lambda Runner
    > ^ <   ● Service: example-service [stage: dev]
 ────────────────────────────────────────────────────────────
@@ -35,20 +35,6 @@
 > - 🚧 **En Desarrollo Continuo:** FreeSLS se encuentra en desarrollo activo y constante evolución. Se están incorporando mejoras, correcciones y nuevas capacidades continuamente.
 > - ⚠️ **Modo AWS SAM:** El soporte para proyectos AWS SAM (`--sam`) está disponible y se ha validado con proyectos reales. Úsalo con precaución: algunas características avanzadas de CloudFormation aún pueden fallar.
 > - ⚡ **Alcance Actual:** FreeSLS se enfoca en **funciones AWS Lambda invocadas mediante eventos HTTP y HTTP API (API Gateway)** y en **reglas programadas de EventBridge** declaradas en el template, tanto para **Serverless Framework** (`serverless.yml`) como para **AWS SAM** (`template.yaml` / `template.yml`). El soporte para otros desencadenadores (SQS, SNS, S3, etc.) está proyectado para futuras versiones. ¡El feedback y los aportes son bienvenidos!
-
-> [!IMPORTANT]
-> **🧪 Versión Beta `v0.7.0-beta.0`**
->
-> Esta pre-versión se enfoca en el próximo trabajo de `0.7.0`. Cambios actualmente en validación:
->
-> - `--cron` para ejecutar eventos `schedule` declarados, con sintaxis AWS de cron/rate.
-> - Cron de seis campos con `L`, `W`, `#`, zonas horarias y manejo de DST.
-> - `Schedule`/`ScheduleV2` de SAM y métodos `eventBus`/`scheduler` de Serverless.
-> - `--cron` y `--scheduler` se pueden combinar.
-> - `--makefile` para funciones SAM construidas por un `Makefile` en la raíz, resolviendo el handler fuente con GNU Make y conservando breakpoints.
-> - Aviso al arrancar cuando hay un `Makefile` en la raíz y funciones makefile sin `--makefile`.
->
-> El feedback sobre estos cambios es especialmente valioso antes del lanzamiento estable `0.7.0`.
 
 ---
 

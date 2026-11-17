@@ -27,7 +27,7 @@ import { SSMParameterNotFoundError } from "./ssm.js";
 import { DEFAULT_OFFLINE_ENV } from "./types.js";
 import { checkForUpdate, isUpdateCheckDisabled } from "./update-check.js";
 
-const VERSION = "0.7.0-beta.0";
+const VERSION = "0.7.0";
 
 const program = new Command();
 
