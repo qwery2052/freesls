@@ -933,6 +933,7 @@ export async function loadSamConfig(
   const functions: FunctionDefinition[] = [];
   const scheduleDefinitions: ScheduleDefinition[] = [];
   const makefileHandlers: MakefileHandlerDefinition[] = [];
+  const makefileFunctions: string[] = [];
   const arns = new Set<string>();
   const resources = finalConfig.Resources || {};
   const makeCommand = options.makefile
@@ -968,11 +969,11 @@ export async function loadSamConfig(
     Object.assign(functionEnv, options.envOverrides);
 
     let handler = resolveSamHandler(resourceName, properties, resourceConfig.Metadata);
-    if (
+    const isMakefileFunction =
       resourceType === "AWS::Serverless::Function" &&
-      options.makefile &&
-      resourceConfig.Metadata?.BuildMethod?.toLowerCase() === "makefile"
-    ) {
+      resourceConfig.Metadata?.BuildMethod?.toLowerCase() === "makefile";
+    if (isMakefileFunction) makefileFunctions.push(resourceName);
+    if (isMakefileFunction && options.makefile) {
       const resolved = resolveMakefileHandler({
         workingDirectory,
         logicalId: resourceName,
@@ -1048,6 +1049,7 @@ export async function loadSamConfig(
     functions,
     schedules: scheduleDefinitions,
     makefileHandlers,
+    makefileFunctions,
     globalEnv: globalEnvironment,
     framework: "sam",
   };

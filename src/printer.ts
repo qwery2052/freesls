@@ -187,6 +187,32 @@ export function printEnvironmentSummary(
 }
 
 /**
+ * Warn when a SAM project uses a root Makefile but --makefile was omitted.
+ * Never includes credentials or request payloads.
+ */
+export function printMakefileWarning(functions: string[]) {
+  console.log(pc.dim("─".repeat(60)));
+  console.log(
+    `\n ${pc.bold(pc.yellow("⚠️  Makefile detected, but --makefile was not provided"))}\n`,
+  );
+  console.log(`   ${pc.white(`This SAM project has ${functions.length} function(s) with:`)}`);
+  console.log(`   ${pc.cyan("Metadata.BuildMethod: makefile")}\n`);
+  console.log(`   ${pc.white("FreeSLS is resolving handlers without Makefile support.")}`);
+  console.log(`   ${pc.dim("If a Handler points to a built artifact, invocation will fail.")}\n`);
+
+  const visible = functions.slice(0, 3);
+  console.log(`   ${pc.dim("Functions:")} ${pc.white(visible.join(", "))}`);
+  if (functions.length > visible.length) {
+    console.log(`   ${pc.dim(`... and ${functions.length - visible.length} more.`)}`);
+  }
+
+  console.log(`\n   ${pc.white("To resolve source handlers and keep breakpoints:")}`);
+  console.log(`     ${pc.cyan("freesls --sam --makefile ...")}\n`);
+  console.log(`   ${pc.dim("GNU Make must be installed and available in PATH.")}`);
+  console.log(pc.dim("─".repeat(60)));
+}
+
+/**
  * Explain that SAM makefile functions execute source handlers resolved with
  * `make -n`. Never includes credentials or request payloads.
  */

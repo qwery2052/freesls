@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadSamConfig } from "../dist/sam-parser.js";
 import { extractMakeSourceFile } from "../dist/sam-makefile.js";
+import { printMakefileWarning } from "../dist/printer.js";
 import { createLambdaExecutor } from "../dist/server.js";
 
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
@@ -142,6 +143,72 @@ test("resolves a SAM makefile function to source and executes it", async t => {
 
   const execute = createLambdaExecutor({ workingDir: directory, port: 0 });
   assert.deepEqual(await execute(loaded.functions[0], {}), { ok: true });
+});
+
+test("reports makefile functions even when --makefile is omitted", async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), "freesls-makefile-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await createSamProject(directory);
+
+  const loaded = await loadSamConfig(directory, {
+    stage: "dev",
+    region: "us-east-1",
+    params: {},
+    cron: true,
+    makefile: false,
+    resolveSSM: false,
+  });
+
+  assert.deepEqual(loaded.makefileFunctions, [logicalId]);
+  assert.deepEqual(loaded.makefileHandlers, []);
+  assert.equal(loaded.functions[0].handler, sourceHandler);
+});
+
+test("prints a prominent warning when a Makefile is detected without --makefile", t => {
+  const lines = [];
+  t.mock.method(console, "log", line => lines.push(String(line ?? "")));
+  printMakefileWarning([logicalId, "AnotherFunction"]);
+
+  const output = lines.join("\n");
+  assert.match(output, /Makefile detected, but --makefile was not provided/);
+  assert.match(output, /Metadata\.BuildMethod: makefile/);
+  assert.match(output, /SendAppointmentRemindersFunction/);
+  assert.match(output, /freesls --sam --makefile/);
+  assert.match(output, /GNU Make/);
+});
+
+test("CLI prints the Makefile warning when --makefile is omitted", async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), "freesls-makefile-cli-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await createSamProject(directory);
+
+  const output = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [cliPath, "--sam", "--no-ssm", "--port", "45682"], {
+      cwd: directory,
+      env: { ...process.env, NO_COLOR: "1" },
+    });
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => {
+      child.kill();
+      reject(new Error("CLI startup timed out"));
+    }, 10000);
+    child.stdout.on("data", chunk => {
+      stdout += chunk;
+      if (stdout.includes("Makefile detected")) child.kill();
+    });
+    child.stderr.on("data", chunk => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", () => {
+      clearTimeout(timeout);
+      if (stdout.includes("Makefile detected")) resolve(stdout);
+      else reject(new Error(stderr || "CLI exited before printing the warning"));
+    });
+  });
+  assert.match(output, /Makefile detected, but --makefile was not provided/);
+  assert.match(output, /freesls --sam --makefile/);
 });
 
 test("rejects --makefile without a Makefile", async t => {

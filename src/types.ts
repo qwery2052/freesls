@@ -67,6 +67,7 @@ export interface LoadResult {
   functions?: FunctionDefinition[];
   schedules?: ScheduleDefinition[];
   makefileHandlers?: MakefileHandlerDefinition[];
+  makefileFunctions?: string[];
   globalEnv: Record<string, string>;
   framework?: "serverless" | "sam";
 }

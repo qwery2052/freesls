@@ -46,6 +46,7 @@
 > - `Schedule`/`ScheduleV2` de SAM y métodos `eventBus`/`scheduler` de Serverless.
 > - `--cron` y `--scheduler` se pueden combinar.
 > - `--makefile` para funciones SAM construidas por un `Makefile` en la raíz, resolviendo el handler fuente con GNU Make y conservando breakpoints.
+> - Aviso al arrancar cuando hay un `Makefile` en la raíz y funciones makefile sin `--makefile`.
 >
 > El feedback sobre estos cambios es especialmente valioso antes del lanzamiento estable `0.7.0`.
 
@@ -704,6 +705,8 @@ y ejecuta ese fuente con Jiti. Es intencional: **los breakpoints y la depuració
    • SendAppointmentRemindersFunction → src/functions/send-appointment-reminders/handler.ts
    Breakpoints use the source files. Restart FreeSLS if the Makefile changes.
 ```
+
+Si existe un `Makefile` en la raíz y al menos una función declara `BuildMethod: makefile`, pero no se pasó `--makefile`, FreeSLS muestra un aviso destacado al arrancar con las funciones afectadas y el comando necesario. El aviso es informativo; el arranque continúa.
 
 Notas:
 

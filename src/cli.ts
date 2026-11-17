@@ -14,6 +14,7 @@ import {
   printSchedules,
   printScheduleEvent,
   printMakefileNotice,
+  printMakefileWarning,
   printLambdaStart,
   printSsmResolutionError,
   printUpdateNotice,
@@ -158,6 +159,7 @@ program
         functions = [],
         schedules = [],
         makefileHandlers = [],
+        makefileFunctions = [],
         globalEnv,
         framework,
       } = isSamMode
@@ -175,6 +177,12 @@ program
       printEnvironmentSummary(globalEnv, Boolean(commandOptions.showEnv));
       if (commandOptions.makefile) {
         printMakefileNotice(makefileHandlers, Boolean(commandOptions.debug));
+      } else if (
+        isSamMode &&
+        makefileFunctions.length > 0 &&
+        fs.existsSync(path.resolve(process.cwd(), "Makefile"))
+      ) {
+        printMakefileWarning(makefileFunctions);
       }
       printRoutes(routes, serverPort, basePath, Boolean(commandOptions.scheduler));
       if (commandOptions.cron) {
